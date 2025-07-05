@@ -1,5 +1,5 @@
 
-# SmartOutreach Tracking System
+# SmartOutreach Tracking New System
 
 This application allows organizations to track their outreach employees with check-in/check-out and location tracking features.
 
