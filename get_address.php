@@ -19,8 +19,11 @@ if ($latitude == 0 || $longitude == 0) {
     exit;
 }
 
+// Get username from session
+$username = $_SESSION['username'];
+
 // Try to get address from FastAPI first
-$address = getAddressFromFastAPI($latitude, $longitude);
+$address = getAddressFromFastAPI($latitude, $longitude, $username);
 
 // If FastAPI fails, fallback to OpenStreetMap
 if (!$address) {
@@ -38,19 +41,16 @@ echo json_encode([
 exit;
 
 // Function to get address from FastAPI
-function getAddressFromFastAPI($lat, $lng) {
+function getAddressFromFastAPI($lat, $lng, $username) {
     global $fastapi_base_url;
     
-    // Create a temporary username for address lookup
-    $tempUsername = 'temp_' . time();
-    
-    // Try to get location data from FastAPI
-    $api_url = $fastapi_base_url . "/update_location/{$tempUsername}/{$lng}_{$lat}";
+    // Update location in FastAPI
+    $api_url = $fastapi_base_url . "/update_location/{$username}/{$lng}_{$lat}";
     $response = makeApiRequest($api_url, 'POST');
     
     if ($response && isset($response['message'])) {
         // Now fetch the location to get the address
-        $fetch_url = $fastapi_base_url . "/fetch_location/{$tempUsername}";
+        $fetch_url = $fastapi_base_url . "/fetch_location/{$username}";
         $location_data = makeApiRequest($fetch_url, 'GET');
         
         if ($location_data && isset($location_data['address'])) {

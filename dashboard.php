@@ -1,4 +1,3 @@
-
 <?php
 require_once 'config.php';
 
@@ -13,28 +12,30 @@ $stmt = $pdo->prepare("SELECT * FROM users WHERE id = ?");
 $stmt->execute([$user_id]);
 $user = $stmt->fetch();
 
-// Check device lock for users only
+// Check device lock for users only (never for masters or developers)
 if ($user['role'] === 'user' && checkDeviceLock($user_id)) {
     session_destroy();
     redirect('index.php?error=device_locked');
 }
 
-// If master user and checkin not required, redirect to admin panel
-if ($user['role'] === 'master' && getSettings('master_checkin_required', '0') == '0') {
+// If master user, redirect to admin panel (no checkin required for masters)
+if ($user['role'] === 'master') {
     redirect('admin.php?tab=dashboard');
 }
 
 // Check if the user needs to check in based on role
 function userNeedsToCheckIn($role) {
+    // Masters don't need to check in
+    if ($role === 'master') {
+        return false;
+    }
+    
+    // Users need to check in
     if ($role === 'user') {
         return true;
     }
     
-    if ($role === 'master') {
-        $masterCheckinRequired = getSettings('master_checkin_required', '0');
-        return $masterCheckinRequired == '1';
-    }
-    
+    // Developers don't need to check in
     return false;
 }
 
@@ -44,14 +45,13 @@ $needsToCheckIn = userNeedsToCheckIn($user['role']);
 $lastCheckin = getLastCheckin($user_id);
 $isCheckedIn = !empty($lastCheckin);
 
-// If checked in, calculate duration using database time
+// If checked in, calculate duration using Pakistani time
 $checkinDuration = '';
 if ($isCheckedIn) {
-    $stmt = $pdo->prepare("SELECT TIMESTAMPDIFF(MINUTE, ?, NOW()) as duration_minutes");
-    $stmt->execute([$lastCheckin['check_in']]);
-    $result = $stmt->fetch();
+    $checkinTime = new DateTime($lastCheckin['check_in'], new DateTimeZone('Asia/Karachi'));
+    $now = new DateTime('now', new DateTimeZone('Asia/Karachi'));
     
-    $totalMinutes = $result['duration_minutes'];
+    $totalMinutes = ($now->getTimestamp() - $checkinTime->getTimestamp()) / 60;
     $hours = floor($totalMinutes / 60);
     $minutes = $totalMinutes % 60;
     
@@ -73,15 +73,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             // Update user location status
             updateUserLocationStatus($user_id, true);
             
-            // Redirect without popup
             redirect('dashboard.php');
         } 
         else if ($_POST['action'] === 'checkout' && $isCheckedIn) {
             // Calculate duration in minutes
-            $stmt = $pdo->prepare("SELECT TIMESTAMPDIFF(MINUTE, ?, NOW()) as duration_minutes");
-            $stmt->execute([$lastCheckin['check_in']]);
-            $result = $stmt->fetch();
-            $duration_minutes = $result['duration_minutes'];
+            $checkinTime = new DateTime($lastCheckin['check_in'], new DateTimeZone('Asia/Karachi'));
+            $now = new DateTime('now', new DateTimeZone('Asia/Karachi'));
+            $duration_minutes = ($now->getTimestamp() - $checkinTime->getTimestamp()) / 60;
             
             // Perform check-out
             $stmt = $pdo->prepare("UPDATE attendance SET check_out = NOW(), duration_minutes = ? WHERE id = ?");
@@ -94,11 +92,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             // Update user location status
             updateUserLocationStatus($user_id, false);
             
-            // Redirect without popup
             redirect('dashboard.php');
         }
         else if ($_POST['action'] === 'update_location' && $isCheckedIn) {
-            // Update location using FastAPI
+            // Update location using FastAPI ONLY
             $latitude = $_POST['latitude'] ?? 0;
             $longitude = $_POST['longitude'] ?? 0;
             
@@ -108,10 +105,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $response = makeApiRequest($api_url, 'POST');
                 
                 if ($response !== false) {
-                    // Also save to local database for backup
-                    $stmt = $pdo->prepare("INSERT INTO locations (user_id, latitude, longitude, address) VALUES (?, ?, ?, ?)");
-                    $stmt->execute([$user_id, $latitude, $longitude, 'Updated via FastAPI']);
-                    
                     // Update user location status
                     updateUserLocationStatus($user_id, true);
                     
@@ -122,15 +115,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         exit;
                     }
                 } else {
-                    // Fallback to local database if API fails
-                    $stmt = $pdo->prepare("INSERT INTO locations (user_id, latitude, longitude, address) VALUES (?, ?, ?, ?)");
-                    $stmt->execute([$user_id, $latitude, $longitude, 'Local backup']);
-                    
+                    // If FastAPI fails, still update status but log error
                     updateUserLocationStatus($user_id, true);
                     
                     if (isset($_POST['ajax']) && $_POST['ajax'] == 1) {
                         header('Content-Type: application/json');
-                        echo json_encode(['success' => true, 'message' => 'Location updated (local backup)']);
+                        echo json_encode(['success' => false, 'message' => 'Failed to update location']);
                         exit;
                     }
                 }
@@ -149,6 +139,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 // Get app name from settings
 $appName = getSettings('app_name', 'SmartOutreach');
 $locationUpdateInterval = getSettings('location_update_interval', '300') * 1000; // Convert to milliseconds
+
+// Get current Pakistani time
+$currentTime = new DateTime('now', new DateTimeZone('Asia/Karachi'));
 ?>
 
 <!DOCTYPE html>
@@ -402,8 +395,8 @@ $locationUpdateInterval = getSettings('location_update_interval', '300') * 1000;
                     <?php endif; ?>
                     
                     <div class="info-item">
-                        <div class="info-label">Server Time</div>
-                        <div class="info-value clock" id="current-time"></div>
+                        <div class="info-label">Pakistani Time</div>
+                        <div class="info-value clock" id="current-time"><?php echo $currentTime->format('h:i:s A'); ?></div>
                     </div>
                 </div>
                 
@@ -461,10 +454,12 @@ $locationUpdateInterval = getSettings('location_update_interval', '300') * 1000;
             const fastApiBaseUrl = '<?php echo $fastapi_base_url; ?>';
             const updateInterval = <?php echo $locationUpdateInterval; ?>;
             
-            // Update clock
+            // Update Pakistani time clock
             function updateClock() {
                 const now = new Date();
-                const timeString = now.toLocaleTimeString();
+                // Convert to Pakistani time
+                const pakistaniTime = new Date(now.toLocaleString("en-US", {timeZone: "Asia/Karachi"}));
+                const timeString = pakistaniTime.toLocaleTimeString('en-US', {hour12: true});
                 document.getElementById('current-time').textContent = timeString;
             }
             
@@ -483,7 +478,7 @@ $locationUpdateInterval = getSettings('location_update_interval', '300') * 1000;
             setInterval(updateClock, 1000);
             updateClock();
             
-            // Location tracking for checked-in users
+            // Location tracking for checked-in users using FastAPI ONLY
             if (isCheckedIn) {
                 if ('geolocation' in navigator) {
                     // Get location immediately
@@ -502,7 +497,7 @@ $locationUpdateInterval = getSettings('location_update_interval', '300') * 1000;
                         const latitude = position.coords.latitude;
                         const longitude = position.coords.longitude;
                         
-                        // Send location to server
+                        // Send location to server (will use FastAPI)
                         const formData = new FormData();
                         formData.append('action', 'update_location');
                         formData.append('latitude', latitude);
@@ -515,7 +510,7 @@ $locationUpdateInterval = getSettings('location_update_interval', '300') * 1000;
                         })
                         .then(response => response.json())
                         .then(data => {
-                            console.log('Location updated:', data);
+                            console.log('Location updated via FastAPI:', data);
                         })
                         .catch(error => {
                             console.error('Error updating location:', error);

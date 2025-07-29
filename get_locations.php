@@ -19,7 +19,7 @@ if (!isAdmin()) {
 // Get logged in user's role
 $loggedInUserRole = $_SESSION['role'];
 
-// Try to get locations from FastAPI first
+// Get locations from FastAPI ONLY
 $locations = [];
 $fastapi_success = false;
 
@@ -49,7 +49,7 @@ if ($response !== false && is_array($response)) {
                 $stmt->execute([$user['id']]);
                 $isCheckedIn = $stmt->rowCount() > 0;
                 
-                // Only show checked in users (unless developer viewing checked out users)
+                // Only show checked in users (unless developer viewing all)
                 if ($isCheckedIn || ($loggedInUserRole === 'developer')) {
                     $locations[] = [
                         'user_id' => $user['id'],
@@ -61,7 +61,7 @@ if ($response !== false && is_array($response)) {
                         'longitude' => $location['longitude'],
                         'address' => $location['address'] ?? 'Unknown location',
                         'is_location_enabled' => $isCheckedIn ? 1 : 0,
-                        'timestamp' => date('Y-m-d H:i:s'), // FastAPI doesn't provide timestamp
+                        'timestamp' => date('Y-m-d H:i:s'), // Current Pakistani time
                         'formatted_time' => date('h:i A')
                     ];
                 }
@@ -70,37 +70,9 @@ if ($response !== false && is_array($response)) {
     }
 }
 
-// If FastAPI failed, fallback to local database
+// If FastAPI failed, return empty array (we don't want to hit database for locations)
 if (!$fastapi_success) {
-    $stmt = $pdo->prepare("
-        SELECT l.*, u.full_name, u.username, u.role, u.is_location_enabled, u.user_role
-        FROM locations l
-        JOIN users u ON l.user_id = u.id
-        WHERE l.id IN (
-            SELECT MAX(id) 
-            FROM locations 
-            GROUP BY user_id
-        )
-        AND u.is_location_enabled = 1
-        " . ($loggedInUserRole === 'master' ? "AND u.role = 'user'" : "") . "
-    ");
-    $stmt->execute();
-    $localLocations = $stmt->fetchAll();
-    
-    // Check if each user is checked in
-    foreach ($localLocations as $location) {
-        $stmt = $pdo->prepare("SELECT id FROM attendance WHERE user_id = ? AND check_out IS NULL LIMIT 1");
-        $stmt->execute([$location['user_id']]);
-        $isCheckedIn = $stmt->rowCount() > 0;
-        
-        // Only include users who are checked in (unless developer viewing all)
-        if ($isCheckedIn || ($loggedInUserRole === 'developer')) {
-            $timestamp = new DateTime($location['timestamp']);
-            $location['formatted_time'] = $timestamp->format('h:i A');
-            $locations[] = $location;
-        }
-    }
+    $locations = [];
 }
 
 echo json_encode($locations);
-?>

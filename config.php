@@ -1,5 +1,8 @@
 
 <?php
+// Set Pakistani timezone as default
+date_default_timezone_set('Asia/Karachi');
+
 // Database configuration
 $host = "srv1135.hstgr.io";
 $dbname = "u769157863_ort";
@@ -19,9 +22,6 @@ try {
 if (session_status() == PHP_SESSION_NONE) {
     session_start();
 }
-
-// Use database timezone - no timezone conversion
-// date_default_timezone_set('UTC'); // Remove this line to use database time
 
 // Helper functions
 function isLoggedIn() {
@@ -51,7 +51,7 @@ function incrementDbRequest($request_type = 'general', $user_id = null) {
     global $pdo;
     
     try {
-        $stmt = $pdo->prepare("INSERT INTO db_requests (request_type, user_id) VALUES (?, ?)");
+        $stmt = $pdo->prepare("INSERT INTO db_requests (request_type, user_id, timestamp) VALUES (?, ?, NOW())");
         $stmt->execute([$request_type, $user_id]);
         
         // Update settings counter
@@ -62,7 +62,7 @@ function incrementDbRequest($request_type = 'general', $user_id = null) {
     }
 }
 
-// Device tracking functions
+// Device tracking functions - ONLY FOR USERS
 function getDeviceId() {
     $userAgent = $_SERVER['HTTP_USER_AGENT'] ?? '';
     $ip = $_SERVER['REMOTE_ADDR'] ?? '';
@@ -72,13 +72,19 @@ function getDeviceId() {
 function checkDeviceLock($user_id) {
     global $pdo;
     
-    // Only check device lock for regular users
+    // Get user role first
     $stmt = $pdo->prepare("SELECT role FROM users WHERE id = ?");
     $stmt->execute([$user_id]);
     $user = $stmt->fetch();
     
-    if (!$user || $user['role'] !== 'user') {
-        return false; // Don't lock masters or developers
+    // NEVER lock master or developer accounts
+    if (!$user || $user['role'] === 'master' || $user['role'] === 'developer') {
+        return false;
+    }
+    
+    // Only check device lock for regular users
+    if ($user['role'] !== 'user') {
+        return false;
     }
     
     incrementDbRequest('device_check', $user_id);
@@ -110,7 +116,7 @@ function checkDeviceLock($user_id) {
     }
     
     // Record current device
-    $stmt = $pdo->prepare("INSERT INTO device_tracking (user_id, device_id, ip_address, user_agent) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE login_time = NOW(), is_active = 1");
+    $stmt = $pdo->prepare("INSERT INTO device_tracking (user_id, device_id, ip_address, user_agent, login_time) VALUES (?, ?, ?, ?, NOW()) ON DUPLICATE KEY UPDATE login_time = NOW(), is_active = 1");
     $stmt->execute([$user_id, $currentDeviceId, $currentIp, $currentUserAgent]);
     
     return false;
@@ -139,7 +145,7 @@ function logActivity($user_id, $activity_type, $description = "") {
     
     $ip = $_SERVER['REMOTE_ADDR'] ?? 'Unknown';
     
-    $stmt = $pdo->prepare("INSERT INTO activity_logs (user_id, activity_type, description, ip_address) VALUES (?, ?, ?, ?)");
+    $stmt = $pdo->prepare("INSERT INTO activity_logs (user_id, activity_type, description, ip_address, timestamp) VALUES (?, ?, ?, ?, NOW())");
     $stmt->execute([$user_id, $activity_type, $description, $ip]);
 }
 
@@ -228,15 +234,12 @@ function updateUserLocationStatus($user_id, $status) {
     $stmt->execute([$status ? 1 : 0, $user_id]);
 }
 
-// Auto checkout functions (without timezone conversion)
+// Auto checkout functions (with Pakistani time)
 function autoCheckoutAtEndOfDay() {
     global $pdo;
     
-    // Get current time from database
-    $stmt = $pdo->prepare("SELECT NOW() as current_time");
-    $stmt->execute();
-    $result = $stmt->fetch();
-    $now = new DateTime($result['current_time']);
+    // Get current Pakistani time
+    $now = new DateTime('now', new DateTimeZone('Asia/Karachi'));
     
     // Check if auto checkout is enabled
     $autoCheckoutEnabled = getSettings('auto_checkout_enabled', '1') == '1';
@@ -257,8 +260,8 @@ function autoCheckoutAtEndOfDay() {
             }
             
             // Calculate duration in minutes
-            $checkinTime = new DateTime($checkIn['check_in']);
-            $checkout_time = new DateTime($result['current_time']);
+            $checkinTime = new DateTime($checkIn['check_in'], new DateTimeZone('Asia/Karachi'));
+            $checkout_time = new DateTime('now', new DateTimeZone('Asia/Karachi'));
             $duration = $checkout_time->getTimestamp() - $checkinTime->getTimestamp();
             $duration_minutes = round($duration / 60);
             
@@ -287,11 +290,8 @@ function autoCheckoutAfterHours() {
     
     incrementDbRequest('auto_checkout_hours');
     
-    // Get current time from database
-    $stmt = $pdo->prepare("SELECT NOW() as current_time");
-    $stmt->execute();
-    $result = $stmt->fetch();
-    $now = new DateTime($result['current_time']);
+    // Get current Pakistani time
+    $now = new DateTime('now', new DateTimeZone('Asia/Karachi'));
     
     // Find all active check-ins
     $stmt = $pdo->prepare("
@@ -310,7 +310,7 @@ function autoCheckoutAfterHours() {
         }
         
         // Calculate how long they've been checked in
-        $checkinTime = new DateTime($checkIn['check_in']);
+        $checkinTime = new DateTime($checkIn['check_in'], new DateTimeZone('Asia/Karachi'));
         $hoursActive = ($now->getTimestamp() - $checkinTime->getTimestamp()) / 3600;
         
         if ($hoursActive >= $autoCheckoutHours) {
@@ -375,6 +375,10 @@ try {
     
     if (!getSettings('db_request_count')) {
         updateSettings('db_request_count', '0');
+    }
+    
+    if (!getSettings('master_checkin_required')) {
+        updateSettings('master_checkin_required', '0');
     }
 } catch (PDOException $e) {
     // Silently fail if there's an issue

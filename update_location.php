@@ -40,7 +40,7 @@ if ($latitude == 0 || $longitude == 0) {
     exit;
 }
 
-// Try to update location via FastAPI first
+// Use FastAPI ONLY for location updates
 $address = 'Unknown location';
 $fastapi_success = false;
 
@@ -58,17 +58,6 @@ if ($response !== false && isset($response['message'])) {
     if ($location_data && isset($location_data['address'])) {
         $address = $location_data['address'];
     }
-}
-
-// Always save to local database as backup
-try {
-    // If FastAPI didn't provide address, get it from OpenStreetMap
-    if ($address === 'Unknown location') {
-        $address = getAddressFromOpenStreetMap($latitude, $longitude);
-    }
-    
-    $stmt = $pdo->prepare("INSERT INTO locations (user_id, latitude, longitude, address) VALUES (?, ?, ?, ?)");
-    $stmt->execute([$user_id, $latitude, $longitude, $address]);
     
     // Update user location status
     updateUserLocationStatus($user_id, true);
@@ -77,41 +66,16 @@ try {
     header('Content-Type: application/json');
     echo json_encode([
         'success' => true, 
-        'message' => $fastapi_success ? 'Location updated successfully' : 'Location updated (local backup)',
+        'message' => 'Location updated successfully via FastAPI',
         'address' => $address,
         'latitude' => $latitude,
         'longitude' => $longitude,
-        'fastapi_status' => $fastapi_success
+        'fastapi_status' => true
     ]);
-    
-} catch (Exception $e) {
+} else {
+    // If FastAPI fails, just return error (don't save to database)
     header('Content-Type: application/json');
-    echo json_encode(['success' => false, 'message' => 'Database error: ' . $e->getMessage()]);
+    echo json_encode(['success' => false, 'message' => 'Failed to update location via FastAPI']);
 }
 
 exit;
-
-// Function to get address from OpenStreetMap
-function getAddressFromOpenStreetMap($lat, $lng) {
-    $url = "https://nominatim.openstreetmap.org/reverse?format=json&lat={$lat}&lon={$lng}&zoom=18&addressdetails=1";
-    
-    $opts = [
-        'http' => [
-            'method' => 'GET',
-            'header' => 'User-Agent: SmartOutreach-Tracker/1.0'
-        ]
-    ];
-    $context = stream_context_create($opts);
-    
-    $response = @file_get_contents($url, false, $context);
-    
-    if ($response !== false) {
-        $data = json_decode($response, true);
-        
-        if ($data && isset($data['display_name'])) {
-            return $data['display_name'];
-        }
-    }
-    
-    return "Location: $lat, $lng";
-}
