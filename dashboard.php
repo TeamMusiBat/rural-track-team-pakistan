@@ -1,147 +1,170 @@
+
 <?php
+// Enable error reporting for debugging
+error_reporting(E_ALL);
+ini_set('display_errors', 1);
+
 require_once 'config.php';
 
-// Check if user is logged in
-if (!isLoggedIn()) {
-    redirect('index.php');
-}
+try {
+    // Check if user is logged in
+    if (!isLoggedIn()) {
+        redirect('index.php');
+    }
 
-// Get user data
-$user_id = $_SESSION['user_id'];
-$stmt = $pdo->prepare("SELECT * FROM users WHERE id = ?");
-$stmt->execute([$user_id]);
-$user = $stmt->fetch();
+    // Get user data
+    $user_id = $_SESSION['user_id'];
+    $stmt = $pdo->prepare("SELECT * FROM users WHERE id = ?");
+    $stmt->execute([$user_id]);
+    $user = $stmt->fetch();
+    
+    if (!$user) {
+        session_destroy();
+        redirect('index.php?error=user_not_found');
+    }
 
-// Check device lock for users only (never for masters or developers)
-if ($user['role'] === 'user' && checkDeviceLock($user_id)) {
-    session_destroy();
-    redirect('index.php?error=device_locked');
-}
+    // Check device lock ONLY for users with role 'user' (never for masters or developers)
+    if ($user['role'] === 'user' && checkDeviceLock($user_id)) {
+        session_destroy();
+        redirect('index.php?error=device_locked');
+    }
 
-// If master user, redirect to admin panel (no checkin required for masters)
-if ($user['role'] === 'master') {
-    redirect('admin.php?tab=dashboard');
-}
+    // If master user, redirect to admin panel (no checkin required for masters)
+    if ($user['role'] === 'master') {
+        redirect('admin.php?tab=dashboard');
+    }
 
-// Check if the user needs to check in based on role
-function userNeedsToCheckIn($role) {
-    // Masters don't need to check in
-    if ($role === 'master') {
+    // Check if the user needs to check in based on role
+    function userNeedsToCheckIn($role) {
+        // Masters don't need to check in
+        if ($role === 'master') {
+            return false;
+        }
+        
+        // Users need to check in
+        if ($role === 'user') {
+            return true;
+        }
+        
+        // Developers don't need to check in
         return false;
     }
-    
-    // Users need to check in
-    if ($role === 'user') {
-        return true;
+
+    $needsToCheckIn = userNeedsToCheckIn($user['role']);
+
+    // Check if the user is checked in
+    $lastCheckin = getLastCheckin($user_id);
+    $isCheckedIn = !empty($lastCheckin);
+
+    // If checked in, calculate duration using Pakistani time
+    $checkinDuration = '';
+    if ($isCheckedIn) {
+        $checkinTime = new DateTime($lastCheckin['check_in'], new DateTimeZone('Asia/Karachi'));
+        $now = new DateTime('now', new DateTimeZone('Asia/Karachi'));
+        
+        $totalMinutes = ($now->getTimestamp() - $checkinTime->getTimestamp()) / 60;
+        $hours = floor($totalMinutes / 60);
+        $minutes = $totalMinutes % 60;
+        
+        $checkinDuration = sprintf('%d:%02d', $hours, $minutes);
     }
-    
-    // Developers don't need to check in
-    return false;
-}
 
-$needsToCheckIn = userNeedsToCheckIn($user['role']);
-
-// Check if the user is checked in
-$lastCheckin = getLastCheckin($user_id);
-$isCheckedIn = !empty($lastCheckin);
-
-// If checked in, calculate duration using Pakistani time
-$checkinDuration = '';
-if ($isCheckedIn) {
-    $checkinTime = new DateTime($lastCheckin['check_in'], new DateTimeZone('Asia/Karachi'));
-    $now = new DateTime('now', new DateTimeZone('Asia/Karachi'));
-    
-    $totalMinutes = ($now->getTimestamp() - $checkinTime->getTimestamp()) / 60;
-    $hours = floor($totalMinutes / 60);
-    $minutes = $totalMinutes % 60;
-    
-    $checkinDuration = sprintf('%d:%02d', $hours, $minutes);
-}
-
-// Handle check-in/check-out
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    if (isset($_POST['action'])) {
-        if ($_POST['action'] === 'checkin' && !$isCheckedIn && $needsToCheckIn) {
-            // Perform check-in
-            $stmt = $pdo->prepare("INSERT INTO attendance (user_id, check_in) VALUES (?, NOW())");
-            $stmt->execute([$user_id]);
-            
-            if (!isUserDeveloper($user_id)) {
-                logActivity($user_id, 'check_in', 'User checked in');
-            }
-            
-            // Update user location status
-            updateUserLocationStatus($user_id, true);
-            
-            redirect('dashboard.php');
-        } 
-        else if ($_POST['action'] === 'checkout' && $isCheckedIn) {
-            // Calculate duration in minutes
-            $checkinTime = new DateTime($lastCheckin['check_in'], new DateTimeZone('Asia/Karachi'));
-            $now = new DateTime('now', new DateTimeZone('Asia/Karachi'));
-            $duration_minutes = ($now->getTimestamp() - $checkinTime->getTimestamp()) / 60;
-            
-            // Perform check-out
-            $stmt = $pdo->prepare("UPDATE attendance SET check_out = NOW(), duration_minutes = ? WHERE id = ?");
-            $stmt->execute([$duration_minutes, $lastCheckin['id']]);
-            
-            if (!isUserDeveloper($user_id)) {
-                logActivity($user_id, 'check_out', "User checked out. Duration: $duration_minutes minutes");
-            }
-            
-            // Update user location status
-            updateUserLocationStatus($user_id, false);
-            
-            redirect('dashboard.php');
-        }
-        else if ($_POST['action'] === 'update_location' && $isCheckedIn) {
-            // Update location using FastAPI ONLY
-            $latitude = $_POST['latitude'] ?? 0;
-            $longitude = $_POST['longitude'] ?? 0;
-            
-            if ($latitude != 0 && $longitude != 0) {
-                // Call FastAPI to update location
-                $api_url = $fastapi_base_url . "/update_location/{$user['username']}/{$longitude}_{$latitude}";
-                $response = makeApiRequest($api_url, 'POST');
+    // Handle check-in/check-out
+    if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+        if (isset($_POST['action'])) {
+            if ($_POST['action'] === 'checkin' && !$isCheckedIn && $needsToCheckIn) {
+                // Perform check-in
+                $stmt = $pdo->prepare("INSERT INTO attendance (user_id, check_in) VALUES (?, NOW())");
+                $stmt->execute([$user_id]);
                 
-                if ($response !== false) {
-                    // Update user location status
-                    updateUserLocationStatus($user_id, true);
+                if (!isUserDeveloper($user_id)) {
+                    logActivity($user_id, 'check_in', 'User checked in');
+                }
+                
+                // Update user location status
+                updateUserLocationStatus($user_id, true);
+                
+                redirect('dashboard.php');
+            } 
+            else if ($_POST['action'] === 'checkout' && $isCheckedIn) {
+                // Calculate duration in minutes using Pakistani time
+                $checkinTime = new DateTime($lastCheckin['check_in'], new DateTimeZone('Asia/Karachi'));
+                $now = new DateTime('now', new DateTimeZone('Asia/Karachi'));
+                $duration_minutes = ($now->getTimestamp() - $checkinTime->getTimestamp()) / 60;
+                
+                // Perform check-out
+                $stmt = $pdo->prepare("UPDATE attendance SET check_out = NOW(), duration_minutes = ? WHERE id = ?");
+                $stmt->execute([$duration_minutes, $lastCheckin['id']]);
+                
+                if (!isUserDeveloper($user_id)) {
+                    logActivity($user_id, 'check_out', "User checked out. Duration: $duration_minutes minutes");
+                }
+                
+                // Update user location status
+                updateUserLocationStatus($user_id, false);
+                
+                redirect('dashboard.php');
+            }
+            else if ($_POST['action'] === 'update_location' && $isCheckedIn) {
+                // Update location using FastAPI ONLY
+                $latitude = $_POST['latitude'] ?? 0;
+                $longitude = $_POST['longitude'] ?? 0;
+                
+                if ($latitude != 0 && $longitude != 0) {
+                    // Call FastAPI to update location
+                    $api_url = $fastapi_base_url . "/update_location/{$user['username']}/{$longitude}_{$latitude}";
+                    $response = makeApiRequest($api_url, 'POST');
                     
-                    // Return success for AJAX calls
-                    if (isset($_POST['ajax']) && $_POST['ajax'] == 1) {
-                        header('Content-Type: application/json');
-                        echo json_encode(['success' => true, 'message' => 'Location updated successfully']);
-                        exit;
+                    if ($response !== false) {
+                        // Update user location status
+                        updateUserLocationStatus($user_id, true);
+                        
+                        // Return success for AJAX calls
+                        if (isset($_POST['ajax']) && $_POST['ajax'] == 1) {
+                            header('Content-Type: application/json');
+                            echo json_encode(['success' => true, 'message' => 'Location updated successfully']);
+                            exit;
+                        }
+                    } else {
+                        // If FastAPI fails, still update status but log error
+                        updateUserLocationStatus($user_id, true);
+                        
+                        if (isset($_POST['ajax']) && $_POST['ajax'] == 1) {
+                            header('Content-Type: application/json');
+                            echo json_encode(['success' => false, 'message' => 'Failed to update location']);
+                            exit;
+                        }
                     }
                 } else {
-                    // If FastAPI fails, still update status but log error
-                    updateUserLocationStatus($user_id, true);
-                    
+                    // Return error for AJAX calls
                     if (isset($_POST['ajax']) && $_POST['ajax'] == 1) {
                         header('Content-Type: application/json');
-                        echo json_encode(['success' => false, 'message' => 'Failed to update location']);
+                        echo json_encode(['success' => false, 'message' => 'Invalid location data']);
                         exit;
                     }
-                }
-            } else {
-                // Return error for AJAX calls
-                if (isset($_POST['ajax']) && $_POST['ajax'] == 1) {
-                    header('Content-Type: application/json');
-                    echo json_encode(['success' => false, 'message' => 'Invalid location data']);
-                    exit;
                 }
             }
         }
     }
+
+    // Get app name from settings
+    $appName = getSettings('app_name', 'SmartOutreach');
+    $locationUpdateInterval = getSettings('location_update_interval', '300') * 1000; // Convert to milliseconds
+
+    // Get current Pakistani time
+    $currentTime = new DateTime('now', new DateTimeZone('Asia/Karachi'));
+
+} catch (Exception $e) {
+    // Log the error and show user-friendly message
+    error_log("Dashboard error: " . $e->getMessage());
+    echo "<!DOCTYPE html><html><head><title>Error</title></head><body>";
+    echo "<h1>System Error</h1>";
+    echo "<p>There was a problem loading the dashboard. Please try again later.</p>";
+    echo "<p>Error: " . htmlspecialchars($e->getMessage()) . "</p>";
+    echo "<a href='logout.php'>Logout and try again</a>";
+    echo "</body></html>";
+    exit;
 }
-
-// Get app name from settings
-$appName = getSettings('app_name', 'SmartOutreach');
-$locationUpdateInterval = getSettings('location_update_interval', '300') * 1000; // Convert to milliseconds
-
-// Get current Pakistani time
-$currentTime = new DateTime('now', new DateTimeZone('Asia/Karachi'));
 ?>
 
 <!DOCTYPE html>
@@ -461,17 +484,6 @@ $currentTime = new DateTime('now', new DateTimeZone('Asia/Karachi'));
                 const pakistaniTime = new Date(now.toLocaleString("en-US", {timeZone: "Asia/Karachi"}));
                 const timeString = pakistaniTime.toLocaleTimeString('en-US', {hour12: true});
                 document.getElementById('current-time').textContent = timeString;
-            }
-            
-            // Update work duration
-            function updateWorkDuration() {
-                if (isCheckedIn) {
-                    const durationElement = document.getElementById('work-duration');
-                    if (durationElement) {
-                        // This would need to be updated via AJAX for real-time updates
-                        // For now, it shows the duration at page load
-                    }
-                }
             }
             
             // Update clock every second
