@@ -2,8 +2,6 @@
 <?php
 require_once 'config.php';
 
-// This file gets an address from latitude and longitude
-
 // Check if user is logged in
 if (!isLoggedIn()) {
     header('Content-Type: application/json');
@@ -21,8 +19,13 @@ if ($latitude == 0 || $longitude == 0) {
     exit;
 }
 
-// Try to get address from coordinates using OpenStreetMap Nominatim API
-$address = getAddressFromCoordinates($latitude, $longitude);
+// Try to get address from FastAPI first
+$address = getAddressFromFastAPI($latitude, $longitude);
+
+// If FastAPI fails, fallback to OpenStreetMap
+if (!$address) {
+    $address = getAddressFromOpenStreetMap($latitude, $longitude);
+}
 
 // Return response
 header('Content-Type: application/json');
@@ -34,27 +37,51 @@ echo json_encode([
 ]);
 exit;
 
-// Function to get address from coordinates
-function getAddressFromCoordinates($lat, $lng) {
-    // Use OpenStreetMap Nominatim API
-    $url = "https://nominatim.openstreetmap.org/reverse?format=json&lat={$lat}&lon={$lng}&zoom=18&addressdetails=1";
+// Function to get address from FastAPI
+function getAddressFromFastAPI($lat, $lng) {
+    global $fastapi_base_url;
     
-    // Set up cURL
-    $ch = curl_init();
-    curl_setopt($ch, CURLOPT_URL, $url);
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
-    curl_setopt($ch, CURLOPT_USERAGENT, 'SmartOutreach Location Service');
+    // Create a temporary username for address lookup
+    $tempUsername = 'temp_' . time();
     
-    // Execute request
-    $response = curl_exec($ch);
-    curl_close($ch);
+    // Try to get location data from FastAPI
+    $api_url = $fastapi_base_url . "/update_location/{$tempUsername}/{$lng}_{$lat}";
+    $response = makeApiRequest($api_url, 'POST');
     
-    // Parse response
-    $data = json_decode($response, true);
-    
-    if (isset($data['display_name'])) {
-        return $data['display_name'];
+    if ($response && isset($response['message'])) {
+        // Now fetch the location to get the address
+        $fetch_url = $fastapi_base_url . "/fetch_location/{$tempUsername}";
+        $location_data = makeApiRequest($fetch_url, 'GET');
+        
+        if ($location_data && isset($location_data['address'])) {
+            return $location_data['address'];
+        }
     }
     
-    return 'Unknown location';
+    return false;
+}
+
+// Function to get address from OpenStreetMap (fallback)
+function getAddressFromOpenStreetMap($lat, $lng) {
+    $url = "https://nominatim.openstreetmap.org/reverse?format=json&lat={$lat}&lon={$lng}&zoom=18&addressdetails=1";
+    
+    $opts = [
+        'http' => [
+            'method' => 'GET',
+            'header' => 'User-Agent: SmartOutreach-Tracker/1.0'
+        ]
+    ];
+    $context = stream_context_create($opts);
+    
+    $response = @file_get_contents($url, false, $context);
+    
+    if ($response !== false) {
+        $data = json_decode($response, true);
+        
+        if ($data && isset($data['display_name'])) {
+            return $data['display_name'];
+        }
+    }
+    
+    return "Location: $lat, $lng";
 }

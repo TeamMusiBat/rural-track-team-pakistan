@@ -1,7 +1,6 @@
 
 <?php
 require_once 'config.php';
-require_once 'location_utils.php';
 
 // Check if user is logged in
 if (!isLoggedIn()) {
@@ -14,71 +13,58 @@ $stmt = $pdo->prepare("SELECT * FROM users WHERE id = ?");
 $stmt->execute([$user_id]);
 $user = $stmt->fetch();
 
+// Check device lock for users only
+if ($user['role'] === 'user' && checkDeviceLock($user_id)) {
+    session_destroy();
+    redirect('index.php?error=device_locked');
+}
+
 // If master user and checkin not required, redirect to admin panel
 if ($user['role'] === 'master' && getSettings('master_checkin_required', '0') == '0') {
     redirect('admin.php?tab=dashboard');
 }
 
 // Check if the user needs to check in based on role
+function userNeedsToCheckIn($role) {
+    if ($role === 'user') {
+        return true;
+    }
+    
+    if ($role === 'master') {
+        $masterCheckinRequired = getSettings('master_checkin_required', '0');
+        return $masterCheckinRequired == '1';
+    }
+    
+    return false;
+}
+
 $needsToCheckIn = userNeedsToCheckIn($user['role']);
 
 // Check if the user is checked in
 $lastCheckin = getLastCheckin($user_id);
 $isCheckedIn = !empty($lastCheckin);
 
-// If checked in, calculate duration accurately (database time)
+// If checked in, calculate duration using database time
 $checkinDuration = '';
 if ($isCheckedIn) {
-    $checkin_time = new DateTime($lastCheckin['check_in']);
-    $current_time = new DateTime();
-    $interval = $current_time->diff($checkin_time);
+    $stmt = $pdo->prepare("SELECT TIMESTAMPDIFF(MINUTE, ?, NOW()) as duration_minutes");
+    $stmt->execute([$lastCheckin['check_in']]);
+    $result = $stmt->fetch();
     
-    $hours = $interval->h + ($interval->days * 24);
-    $minutes = $interval->i;
+    $totalMinutes = $result['duration_minutes'];
+    $hours = floor($totalMinutes / 60);
+    $minutes = $totalMinutes % 60;
     
     $checkinDuration = sprintf('%d:%02d', $hours, $minutes);
-}
-
-// FastAPI endpoint configuration
-$fastapi_base_url = 'http://54.250.198.0:8000';
-
-// Function to make FastAPI requests
-function makeApiRequest($url, $method = 'GET', $data = null) {
-    $ch = curl_init();
-    curl_setopt($ch, CURLOPT_URL, $url);
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_TIMEOUT, 10);
-    curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 5);
-    
-    if ($method === 'POST') {
-        curl_setopt($ch, CURLOPT_POST, true);
-        if ($data) {
-            curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($data));
-            curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
-        }
-    }
-    
-    $response = curl_exec($ch);
-    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    curl_close($ch);
-    
-    if ($response === false || $httpCode !== 200) {
-        return false;
-    }
-    
-    return json_decode($response, true);
 }
 
 // Handle check-in/check-out
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (isset($_POST['action'])) {
         if ($_POST['action'] === 'checkin' && !$isCheckedIn && $needsToCheckIn) {
-            // Perform check-in with database time
-            $now = new DateTime();
-            $timestamp = $now->format('Y-m-d H:i:s');
-            
-            $stmt = $pdo->prepare("INSERT INTO attendance (user_id, check_in) VALUES (?, ?)");
-            $stmt->execute([$user_id, $timestamp]);
+            // Perform check-in
+            $stmt = $pdo->prepare("INSERT INTO attendance (user_id, check_in) VALUES (?, NOW())");
+            $stmt->execute([$user_id]);
             
             if (!isUserDeveloper($user_id)) {
                 logActivity($user_id, 'check_in', 'User checked in');
@@ -87,25 +73,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             // Update user location status
             updateUserLocationStatus($user_id, true);
             
-            // Redirect to refresh page
+            // Redirect without popup
             redirect('dashboard.php');
         } 
         else if ($_POST['action'] === 'checkout' && $isCheckedIn) {
-            // Calculate accurate duration in minutes (database time)
-            $checkin_time = new DateTime($lastCheckin['check_in']);
-            $checkout_time = new DateTime();
-            $interval = $checkout_time->diff($checkin_time);
+            // Calculate duration in minutes
+            $stmt = $pdo->prepare("SELECT TIMESTAMPDIFF(MINUTE, ?, NOW()) as duration_minutes");
+            $stmt->execute([$lastCheckin['check_in']]);
+            $result = $stmt->fetch();
+            $duration_minutes = $result['duration_minutes'];
             
-            $hours = $interval->h + ($interval->days * 24);
-            $minutes = $interval->i;
-            $duration_minutes = ($hours * 60) + $minutes;
-            
-            // Perform check-out with database time
-            $now = new DateTime();
-            $timestamp = $now->format('Y-m-d H:i:s');
-            
-            $stmt = $pdo->prepare("UPDATE attendance SET check_out = ?, duration_minutes = ? WHERE id = ?");
-            $stmt->execute([$timestamp, $duration_minutes, $lastCheckin['id']]);
+            // Perform check-out
+            $stmt = $pdo->prepare("UPDATE attendance SET check_out = NOW(), duration_minutes = ? WHERE id = ?");
+            $stmt->execute([$duration_minutes, $lastCheckin['id']]);
             
             if (!isUserDeveloper($user_id)) {
                 logActivity($user_id, 'check_out', "User checked out. Duration: $duration_minutes minutes");
@@ -114,7 +94,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             // Update user location status
             updateUserLocationStatus($user_id, false);
             
-            // Redirect to refresh page
+            // Redirect without popup
             redirect('dashboard.php');
         }
         else if ($_POST['action'] === 'update_location' && $isCheckedIn) {
@@ -129,7 +109,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 
                 if ($response !== false) {
                     // Also save to local database for backup
-                    saveLocationWithAddress($user_id, $latitude, $longitude);
+                    $stmt = $pdo->prepare("INSERT INTO locations (user_id, latitude, longitude, address) VALUES (?, ?, ?, ?)");
+                    $stmt->execute([$user_id, $latitude, $longitude, 'Updated via FastAPI']);
                     
                     // Update user location status
                     updateUserLocationStatus($user_id, true);
@@ -142,7 +123,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     }
                 } else {
                     // Fallback to local database if API fails
-                    saveLocationWithAddress($user_id, $latitude, $longitude);
+                    $stmt = $pdo->prepare("INSERT INTO locations (user_id, latitude, longitude, address) VALUES (?, ?, ?, ?)");
+                    $stmt->execute([$user_id, $latitude, $longitude, 'Local backup']);
+                    
                     updateUserLocationStatus($user_id, true);
                     
                     if (isset($_POST['ajax']) && $_POST['ajax'] == 1) {
@@ -162,6 +145,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
 }
+
+// Get app name from settings
+$appName = getSettings('app_name', 'SmartOutreach');
+$locationUpdateInterval = getSettings('location_update_interval', '300') * 1000; // Convert to milliseconds
 ?>
 
 <!DOCTYPE html>
@@ -169,7 +156,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SmartOutreach</title>
+    <title><?php echo htmlspecialchars($appName); ?></title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <style>
@@ -192,7 +179,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             padding: 20px;
             text-align: center;
             box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-            position: relative;
         }
         
         .header h1 {
@@ -201,15 +187,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         
         .container {
-            max-width: 100%;
+            max-width: 800px;
             margin: 0 auto;
             padding: 20px;
-        }
-        
-        @media (min-width: 640px) {
-            .container {
-                max-width: 800px;
-            }
         }
         
         .card {
@@ -218,12 +198,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             box-shadow: 0 4px 12px rgba(0,0,0,0.05);
             margin-bottom: 20px;
             overflow: hidden;
-            transition: transform 0.2s, box-shadow 0.2s;
-        }
-        
-        .card:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 6px 16px rgba(0,0,0,0.1);
         }
         
         .card-header {
@@ -256,67 +230,40 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             padding: 24px;
         }
         
-        .user-info {
-            display: flex;
-            align-items: center;
+        .info-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
             margin-bottom: 20px;
         }
         
-        .user-avatar {
-            width: 64px;
-            height: 64px;
-            border-radius: 16px;
-            background-color: #e2e8f0;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: #4f46e5;
-            font-size: 24px;
-            margin-right: 20px;
-            flex-shrink: 0;
+        .info-item {
+            background-color: #f8fafc;
+            padding: 16px;
+            border-radius: 8px;
+            border-left: 4px solid #4f46e5;
         }
         
-        .user-details {
-            flex-grow: 1;
-        }
-        
-        .user-name {
-            font-size: 20px;
-            font-weight: 600;
-            margin-bottom: 4px;
-            color: #333;
-        }
-        
-        .user-role {
-            font-size: 14px;
+        .info-label {
+            font-size: 12px;
             color: #64748b;
             margin-bottom: 4px;
-        }
-        
-        .status-info {
-            margin-bottom: 24px;
-        }
-        
-        .status-label {
-            font-size: 14px;
-            color: #64748b;
-            margin-bottom: 8px;
-        }
-        
-        .status-value {
-            font-size: 16px;
+            text-transform: uppercase;
             font-weight: 500;
+        }
+        
+        .info-value {
+            font-size: 16px;
+            font-weight: 600;
             color: #333;
         }
         
         .status-active {
             color: #10b981;
-            font-weight: 600;
         }
         
         .status-inactive {
             color: #f59e0b;
-            font-weight: 600;
         }
         
         .action-button {
@@ -331,6 +278,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             border: none;
             transition: all 0.2s;
             margin-bottom: 12px;
+            text-decoration: none;
         }
         
         .check-in {
@@ -351,8 +299,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             background-color: #dc2626;
         }
         
-        .admin-card .card-body {
-            padding: 0;
+        .logout-btn {
+            background-color: #64748b;
+            color: white;
+        }
+        
+        .logout-btn:hover {
+            background-color: #475569;
         }
         
         .admin-link {
@@ -380,8 +333,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             text-align: center;
         }
         
-        .admin-link-title {
-            font-weight: 500;
+        .clock {
+            font-size: 18px;
+            font-weight: 600;
+            color: #4f46e5;
         }
         
         .footer {
@@ -389,163 +344,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             padding: 20px;
             color: #64748b;
             font-size: 13px;
-            margin-top: 20px;
         }
         
-        .offline-banner {
-            background-color: #f97316;
-            color: white;
-            padding: 12px;
-            text-align: center;
-            font-size: 14px;
-            font-weight: 500;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }
-        
-        .offline-banner i {
-            margin-right: 8px;
-        }
-        
-        .permission-modal {
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background-color: rgba(0,0,0,0.7);
-            z-index: 1000;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }
-        
-        .permission-modal-content {
-            background-color: white;
-            border-radius: 12px;
-            padding: 24px;
-            width: 90%;
-            max-width: 400px;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.15);
-        }
-        
-        .permission-title {
-            font-size: 18px;
-            font-weight: 600;
-            margin-bottom: 16px;
-            color: #333;
-        }
-        
-        .permission-text {
-            font-size: 14px;
-            line-height: 1.5;
-            margin-bottom: 20px;
-            color: #4b5563;
-        }
-        
-        .permission-buttons {
-            display: flex;
-            gap: 12px;
-        }
-        
-        .permission-button {
-            flex: 1;
-            padding: 12px;
-            border-radius: 8px;
-            font-weight: 600;
-            border: none;
-            cursor: pointer;
-        }
-        
-        .permission-allow {
-            background-color: #10b981;
-            color: white;
-        }
-        
-        .permission-deny {
-            background-color: #f3f4f6;
-            color: #4b5563;
-        }
-        
-        .location-warning {
-            background-color: #fef2f2;
-            border: 1px solid #fee2e2;
-            color: #b91c1c;
-            padding: 12px;
-            border-radius: 8px;
-            margin-bottom: 16px;
-            display: flex;
-            align-items: center;
-            font-size: 14px;
-        }
-        
-        .location-warning i {
-            margin-right: 8px;
-            font-size: 16px;
-        }
-        
-        /* Additional responsive styles */
         @media (max-width: 640px) {
             .container {
                 padding: 15px 10px;
             }
             
-            .card-header {
-                padding: 16px 16px;
-            }
-            
-            .card-body {
-                padding: 16px;
-            }
-            
-            .user-name {
-                font-size: 18px;
-            }
-            
-            .user-avatar {
-                width: 50px;
-                height: 50px;
-                font-size: 18px;
-                margin-right: 15px;
-            }
-            
-            .action-button {
-                padding: 12px;
-                font-size: 15px;
-            }
-            
-            .admin-link {
-                padding: 15px 16px;
-            }
-            
-            .footer {
-                padding: 15px 10px;
-                font-size: 12px;
+            .info-grid {
+                grid-template-columns: 1fr;
             }
         }
     </style>
 </head>
 <body>
-    <div id="offline-banner" class="offline-banner" style="display: none">
-        <i class="fas fa-wifi-slash"></i> You are currently offline. Limited functionality available.
-    </div>
-    
-    <div id="permission-modal" class="permission-modal" style="display: none;">
-        <div class="permission-modal-content">
-            <div class="permission-title">Enable Location Services</div>
-            <div class="permission-text">
-                SmartOutreach needs access to your location to track your work activities. Please click "Allow" when prompted by your browser.
-            </div>
-            <div class="permission-buttons">
-                <button class="permission-button permission-allow" onclick="requestLocationPermission()">Allow</button>
-                <button class="permission-button permission-deny" onclick="closePermissionModal()">Cancel</button>
-            </div>
-        </div>
-    </div>
-    
     <div class="header">
-        <h1>SmartOutreach</h1>
+        <h1><?php echo htmlspecialchars($appName); ?></h1>
     </div>
     
     <div class="container">
@@ -554,41 +368,42 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <div class="card-header-icon">
                     <i class="fas fa-user"></i>
                 </div>
-                <div class="card-title">Your Profile</div>
+                <div class="card-title">Dashboard</div>
             </div>
             
             <div class="card-body">
-                <div class="user-info">
-                    <div class="user-avatar">
-                        <?php 
-                            $initials = "";
-                            $names = explode(" ", $user['full_name']);
-                            foreach ($names as $name) {
-                                if (!empty($name)) {
-                                    $initials .= strtoupper(substr($name, 0, 1));
-                                    if (strlen($initials) >= 2) break;
-                                }
-                            }
-                            echo $initials;
-                        ?>
+                <div class="info-grid">
+                    <div class="info-item">
+                        <div class="info-label">User</div>
+                        <div class="info-value"><?php echo htmlspecialchars($user['full_name']); ?></div>
                     </div>
-                    <div class="user-details">
-                        <div class="user-name"><?php echo htmlspecialchars($user['full_name']); ?></div>
-                        <div class="user-role"><?php echo ucfirst(htmlspecialchars($user['role'])); ?><?php echo !empty($user['user_role']) ? ' - ' . htmlspecialchars($user['user_role']) : ''; ?></div>
+                    
+                    <div class="info-item">
+                        <div class="info-label">Position</div>
+                        <div class="info-value"><?php echo htmlspecialchars($user['user_role']); ?></div>
                     </div>
-                </div>
-                
-                <div class="status-info">
-                    <div class="status-label">Current Status</div>
-                    <div class="status-value">
-                        <?php if ($isCheckedIn): ?>
-                            <span class="status-active"><i class="fas fa-check-circle"></i> Checked In</span>
-                            <div style="margin-top: 8px; font-size: 14px; color: #64748b;">
-                                Active Time: <?php echo $checkinDuration; ?>
-                            </div>
-                        <?php else: ?>
-                            <span class="status-inactive"><i class="fas fa-times-circle"></i> Checked Out</span>
-                        <?php endif; ?>
+                    
+                    <div class="info-item">
+                        <div class="info-label">Status</div>
+                        <div class="info-value">
+                            <?php if ($isCheckedIn): ?>
+                                <span class="status-active"><i class="fas fa-check-circle"></i> Checked In</span>
+                            <?php else: ?>
+                                <span class="status-inactive"><i class="fas fa-times-circle"></i> Checked Out</span>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                    
+                    <?php if ($isCheckedIn): ?>
+                    <div class="info-item">
+                        <div class="info-label">Work Duration</div>
+                        <div class="info-value" id="work-duration"><?php echo $checkinDuration; ?></div>
+                    </div>
+                    <?php endif; ?>
+                    
+                    <div class="info-item">
+                        <div class="info-label">Server Time</div>
+                        <div class="info-value clock" id="current-time"></div>
                     </div>
                 </div>
                 
@@ -608,24 +423,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         </button>
                     </form>
                     <?php endif; ?>
-                <?php else: ?>
-                    <div style="text-align: center; color: #64748b; font-size: 14px; margin: 20px 0;">
-                        <i class="fas fa-info-circle"></i> Master users don't need to check in/out
-                    </div>
                 <?php endif; ?>
                 
-                <div id="location-status" style="display: none;"></div>
-                
-                <form method="GET" action="logout.php" style="margin-top: 20px;">
-                    <button type="submit" class="action-button" style="background-color: #64748b;">
-                        <i class="fas fa-sign-out-alt"></i> Logout
-                    </button>
-                </form>
+                <a href="logout.php" class="action-button logout-btn">
+                    <i class="fas fa-sign-out-alt"></i> Logout
+                </a>
             </div>
         </div>
         
         <?php if (isAdmin()): ?>
-        <div class="card admin-card">
+        <div class="card">
             <div class="card-header">
                 <div class="card-header-icon">
                     <i class="fas fa-cog"></i>
@@ -633,10 +440,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <div class="card-title">Administrative Tools</div>
             </div>
             
-            <div class="card-body">
+            <div class="card-body" style="padding: 0;">
                 <a href="admin.php" class="admin-link">
                     <i class="fas fa-shield-alt"></i>
-                    <span class="admin-link-title">View Admin Dashboard</span>
+                    <span>Admin Dashboard</span>
                 </a>
             </div>
         </div>
@@ -644,164 +451,85 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     </div>
     
     <div class="footer">
-        SmartOutreach Tracking System &copy; <?php echo date('Y'); ?> | Server Time: <?php echo date('h:i A'); ?>
+        <?php echo htmlspecialchars($appName); ?> &copy; <?php echo date('Y'); ?>
     </div>
 
     <script>
         document.addEventListener('DOMContentLoaded', function() {
             const isCheckedIn = <?php echo $isCheckedIn ? 'true' : 'false'; ?>;
-            const offlineBanner = document.getElementById('offline-banner');
-            const permissionModal = document.getElementById('permission-modal');
-            const locationStatus = document.getElementById('location-status');
             const username = '<?php echo $user['username']; ?>';
             const fastApiBaseUrl = '<?php echo $fastapi_base_url; ?>';
-            let locationAttempts = 0;
-            let refreshAttempts = 0;
+            const updateInterval = <?php echo $locationUpdateInterval; ?>;
             
-            // Check online/offline status
-            function updateOnlineStatus() {
-                if (navigator.onLine) {
-                    offlineBanner.style.display = 'none';
-                } else {
-                    offlineBanner.style.display = 'flex';
-                }
+            // Update clock
+            function updateClock() {
+                const now = new Date();
+                const timeString = now.toLocaleTimeString();
+                document.getElementById('current-time').textContent = timeString;
             }
             
-            window.addEventListener('online', updateOnlineStatus);
-            window.addEventListener('offline', updateOnlineStatus);
-            updateOnlineStatus();
-            
-            // Handle location tracking
-            if (isCheckedIn) {
-                // Check if geolocation is available
-                if ('geolocation' in navigator) {
-                    // Check current permission status
-                    navigator.permissions.query({ name: 'geolocation' }).then(function(permissionStatus) {
-                        if (permissionStatus.state === 'granted') {
-                            // Permission already granted, start tracking
-                            startLocationTracking();
-                        } else if (permissionStatus.state === 'prompt') {
-                            // Show our custom permission modal
-                            permissionModal.style.display = 'flex';
-                        } else if (permissionStatus.state === 'denied') {
-                            // Permission denied - show modal to explain why we need it
-                            permissionModal.style.display = 'flex';
-                        }
-                        
-                        // Listen for permission changes
-                        permissionStatus.onchange = function() {
-                            if (this.state === 'granted') {
-                                permissionModal.style.display = 'none';
-                                startLocationTracking();
-                            }
-                        };
-                    });
-                }
-            }
-            
-            // Function to request location permission
-            window.requestLocationPermission = function() {
-                navigator.geolocation.getCurrentPosition(
-                    function(position) {
-                        permissionModal.style.display = 'none';
-                        startLocationTracking();
-                    },
-                    function(error) {
-                        permissionModal.style.display = 'none';
-                        // Show warning but don't display details to user per requirements
-                        showLocationWarning();
-                    },
-                    { 
-                        enableHighAccuracy: true, 
-                        timeout: 10000, 
-                        maximumAge: 0 
+            // Update work duration
+            function updateWorkDuration() {
+                if (isCheckedIn) {
+                    const durationElement = document.getElementById('work-duration');
+                    if (durationElement) {
+                        // This would need to be updated via AJAX for real-time updates
+                        // For now, it shows the duration at page load
                     }
-                );
-            };
-            
-            // Function to show location warning
-            function showLocationWarning() {
-                // For security reasons, don't show specific error details to user
-                // Just show a warning popup instead
-                alert("Location services are required for accurate tracking while checked in. Please enable location services in your browser settings.");
+                }
             }
             
-            // Function to close permission modal
-            window.closePermissionModal = function() {
-                permissionModal.style.display = 'none';
-                showLocationWarning();
-            };
+            // Update clock every second
+            setInterval(updateClock, 1000);
+            updateClock();
             
-            // Function to start tracking location
-            function startLocationTracking() {
-                // Get location immediately
-                getAndUpdateLocation();
-                
-                // Then update every 60 seconds (1 minute)
-                setInterval(getAndUpdateLocation, 60000);
+            // Location tracking for checked-in users
+            if (isCheckedIn) {
+                if ('geolocation' in navigator) {
+                    // Get location immediately
+                    getAndUpdateLocation();
+                    
+                    // Then update at configured interval
+                    setInterval(getAndUpdateLocation, updateInterval);
+                }
             }
             
-            // Function to get and update location
             function getAndUpdateLocation() {
                 if (!isCheckedIn) return;
                 
-                if ('geolocation' in navigator) {
-                    navigator.geolocation.getCurrentPosition(
-                        function(position) {
-                            // Reset counters on success
-                            locationAttempts = 0;
-                            refreshAttempts = 0;
-                            
-                            const latitude = position.coords.latitude;
-                            const longitude = position.coords.longitude;
-                            
-                            // Send location to server (both local and FastAPI)
-                            const formData = new FormData();
-                            formData.append('action', 'update_location');
-                            formData.append('latitude', latitude);
-                            formData.append('longitude', longitude);
-                            formData.append('ajax', '1');
-                            
-                            fetch('dashboard.php', {
-                                method: 'POST',
-                                body: formData
-                            })
-                            .then(response => response.json())
-                            .then(data => {
-                                console.log('Location updated:', data);
-                            })
-                            .catch(error => {
-                                console.error('Error sending location:', error);
-                            });
-                        },
-                        function(error) {
-                            // Handle error
-                            locationAttempts++;
-                            
-                            if (error.code === error.TIMEOUT) {
-                                console.error('Geolocation error: Timeout');
-                                
-                                // If we've had multiple failures, try refreshing page (limited to 2-3 times)
-                                if (locationAttempts >= 3 && refreshAttempts < 2) {
-                                    refreshAttempts++;
-                                    console.log(`Refreshing page due to location timeout. Attempt ${refreshAttempts}`);
-                                    window.location.reload();
-                                } else {
-                                    // Try again in 1 minute
-                                    setTimeout(getAndUpdateLocation, 60000);
-                                }
-                            } else if (error.code === error.PERMISSION_DENIED) {
-                                // Show the permission modal again
-                                permissionModal.style.display = 'flex';
-                            }
-                        },
-                        { 
-                            enableHighAccuracy: true, 
-                            timeout: 15000, 
-                            maximumAge: 0 
-                        }
-                    );
-                }
+                navigator.geolocation.getCurrentPosition(
+                    function(position) {
+                        const latitude = position.coords.latitude;
+                        const longitude = position.coords.longitude;
+                        
+                        // Send location to server
+                        const formData = new FormData();
+                        formData.append('action', 'update_location');
+                        formData.append('latitude', latitude);
+                        formData.append('longitude', longitude);
+                        formData.append('ajax', '1');
+                        
+                        fetch('dashboard.php', {
+                            method: 'POST',
+                            body: formData
+                        })
+                        .then(response => response.json())
+                        .then(data => {
+                            console.log('Location updated:', data);
+                        })
+                        .catch(error => {
+                            console.error('Error updating location:', error);
+                        });
+                    },
+                    function(error) {
+                        console.error('Geolocation error:', error);
+                    },
+                    { 
+                        enableHighAccuracy: true, 
+                        timeout: 15000, 
+                        maximumAge: 0 
+                    }
+                );
             }
         });
     </script>
