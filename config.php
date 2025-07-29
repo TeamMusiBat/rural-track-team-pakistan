@@ -4,9 +4,9 @@
 date_default_timezone_set('Asia/Karachi');
 
 // Database configuration
-$host = "srv1135.hstgr.io";
-$dbname = "u769157863_ort";
-$username = "u769157863_ort";
+$host = "localhost";
+$dbname = "u696686061_smartort";
+$username = "u696686061_smartort";
 $password = "Atifkhan83##";
 
 // Create connection
