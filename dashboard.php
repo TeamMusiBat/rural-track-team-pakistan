@@ -26,12 +26,11 @@ $needsToCheckIn = userNeedsToCheckIn($user['role']);
 $lastCheckin = getLastCheckin($user_id);
 $isCheckedIn = !empty($lastCheckin);
 
-// If checked in, calculate duration accurately (Pakistan time)
+// If checked in, calculate duration accurately (database time)
 $checkinDuration = '';
 if ($isCheckedIn) {
-    // Make sure to use the Pakistan timezone for all time calculations
-    $checkin_time = new DateTime($lastCheckin['check_in'], new DateTimeZone('Asia/Karachi'));
-    $current_time = new DateTime('now', new DateTimeZone('Asia/Karachi'));
+    $checkin_time = new DateTime($lastCheckin['check_in']);
+    $current_time = new DateTime();
     $interval = $current_time->diff($checkin_time);
     
     $hours = $interval->h + ($interval->days * 24);
@@ -40,12 +39,42 @@ if ($isCheckedIn) {
     $checkinDuration = sprintf('%d:%02d', $hours, $minutes);
 }
 
+// FastAPI endpoint configuration
+$fastapi_base_url = 'http://54.250.198.0:8000';
+
+// Function to make FastAPI requests
+function makeApiRequest($url, $method = 'GET', $data = null) {
+    $ch = curl_init();
+    curl_setopt($ch, CURLOPT_URL, $url);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+    curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 5);
+    
+    if ($method === 'POST') {
+        curl_setopt($ch, CURLOPT_POST, true);
+        if ($data) {
+            curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($data));
+            curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
+        }
+    }
+    
+    $response = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+    
+    if ($response === false || $httpCode !== 200) {
+        return false;
+    }
+    
+    return json_decode($response, true);
+}
+
 // Handle check-in/check-out
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (isset($_POST['action'])) {
         if ($_POST['action'] === 'checkin' && !$isCheckedIn && $needsToCheckIn) {
-            // Perform check-in with explicit Pakistan time
-            $now = new DateTime('now', new DateTimeZone('Asia/Karachi'));
+            // Perform check-in with database time
+            $now = new DateTime();
             $timestamp = $now->format('Y-m-d H:i:s');
             
             $stmt = $pdo->prepare("INSERT INTO attendance (user_id, check_in) VALUES (?, ?)");
@@ -62,17 +91,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             redirect('dashboard.php');
         } 
         else if ($_POST['action'] === 'checkout' && $isCheckedIn) {
-            // Calculate accurate duration in minutes (Pakistan time)
-            $checkin_time = new DateTime($lastCheckin['check_in'], new DateTimeZone('Asia/Karachi'));
-            $checkout_time = new DateTime('now', new DateTimeZone('Asia/Karachi'));
+            // Calculate accurate duration in minutes (database time)
+            $checkin_time = new DateTime($lastCheckin['check_in']);
+            $checkout_time = new DateTime();
             $interval = $checkout_time->diff($checkin_time);
             
             $hours = $interval->h + ($interval->days * 24);
             $minutes = $interval->i;
             $duration_minutes = ($hours * 60) + $minutes;
             
-            // Perform check-out with explicit Pakistan time
-            $now = new DateTime('now', new DateTimeZone('Asia/Karachi'));
+            // Perform check-out with database time
+            $now = new DateTime();
             $timestamp = $now->format('Y-m-d H:i:s');
             
             $stmt = $pdo->prepare("UPDATE attendance SET check_out = ?, duration_minutes = ? WHERE id = ?");
@@ -89,21 +118,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             redirect('dashboard.php');
         }
         else if ($_POST['action'] === 'update_location' && $isCheckedIn) {
-            // Update location
+            // Update location using FastAPI
             $latitude = $_POST['latitude'] ?? 0;
             $longitude = $_POST['longitude'] ?? 0;
             
             if ($latitude != 0 && $longitude != 0) {
-                saveLocationWithAddress($user_id, $latitude, $longitude);
+                // Call FastAPI to update location
+                $api_url = $fastapi_base_url . "/update_location/{$user['username']}/{$longitude}_{$latitude}";
+                $response = makeApiRequest($api_url, 'POST');
                 
-                // Update user location status
-                updateUserLocationStatus($user_id, true);
-                
-                // Return success for AJAX calls
-                if (isset($_POST['ajax']) && $_POST['ajax'] == 1) {
-                    header('Content-Type: application/json');
-                    echo json_encode(['success' => true, 'message' => 'Location updated successfully']);
-                    exit;
+                if ($response !== false) {
+                    // Also save to local database for backup
+                    saveLocationWithAddress($user_id, $latitude, $longitude);
+                    
+                    // Update user location status
+                    updateUserLocationStatus($user_id, true);
+                    
+                    // Return success for AJAX calls
+                    if (isset($_POST['ajax']) && $_POST['ajax'] == 1) {
+                        header('Content-Type: application/json');
+                        echo json_encode(['success' => true, 'message' => 'Location updated successfully']);
+                        exit;
+                    }
+                } else {
+                    // Fallback to local database if API fails
+                    saveLocationWithAddress($user_id, $latitude, $longitude);
+                    updateUserLocationStatus($user_id, true);
+                    
+                    if (isset($_POST['ajax']) && $_POST['ajax'] == 1) {
+                        header('Content-Type: application/json');
+                        echo json_encode(['success' => true, 'message' => 'Location updated (local backup)']);
+                        exit;
+                    }
                 }
             } else {
                 // Return error for AJAX calls
@@ -598,7 +644,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     </div>
     
     <div class="footer">
-        SmartOutreach Tracking System &copy; <?php echo date('Y'); ?> | Pakistan Standard Time: <?php echo date('h:i A'); ?>
+        SmartOutreach Tracking System &copy; <?php echo date('Y'); ?> | Server Time: <?php echo date('h:i A'); ?>
     </div>
 
     <script>
@@ -607,6 +653,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             const offlineBanner = document.getElementById('offline-banner');
             const permissionModal = document.getElementById('permission-modal');
             const locationStatus = document.getElementById('location-status');
+            const username = '<?php echo $user['username']; ?>';
+            const fastApiBaseUrl = '<?php echo $fastapi_base_url; ?>';
             let locationAttempts = 0;
             let refreshAttempts = 0;
             
@@ -707,7 +755,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             const latitude = position.coords.latitude;
                             const longitude = position.coords.longitude;
                             
-                            // Send location to server
+                            // Send location to server (both local and FastAPI)
                             const formData = new FormData();
                             formData.append('action', 'update_location');
                             formData.append('latitude', latitude);
@@ -719,6 +767,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 body: formData
                             })
                             .then(response => response.json())
+                            .then(data => {
+                                console.log('Location updated:', data);
+                            })
                             .catch(error => {
                                 console.error('Error sending location:', error);
                             });
