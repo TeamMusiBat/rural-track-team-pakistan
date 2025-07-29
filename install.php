@@ -7,9 +7,9 @@ if (file_exists($install_lock_file)) {
 }
 
 // Database configuration
-$host = "srv1135.hstgr.io";
-$dbname = "u769157863_ort";
-$username = "u769157863_ort";
+$host = "localhost";
+$dbname = "u696686061_smartort";
+$username = "u696686061_smartort";
 $password = "Atifkhan83##";
 
 $installed = false;
