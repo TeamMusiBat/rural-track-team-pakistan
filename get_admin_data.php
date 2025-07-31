@@ -18,9 +18,8 @@ if (!isAdmin()) {
 
 $loggedInUserRole = $_SESSION['role'];
 
-// Get locations from FastAPI ONLY
+// Get locations from FastAPI ONLY - but filter to show only checked-in users
 $locations = [];
-$users_data = [];
 
 try {
     // Get FastAPI base URL from settings
@@ -31,7 +30,7 @@ try {
     $response = makeApiRequest($api_url, 'GET');
 
     if ($response !== false && is_array($response)) {
-        // Convert FastAPI response to our format
+        // Convert FastAPI response to our format - ONLY CHECKED IN USERS
         foreach ($response as $location) {
             if (isset($location['username'])) {
                 // Get user details from database
@@ -45,25 +44,25 @@ try {
                         continue; // Skip developers and masters for master users
                     }
                     
-                    // Check if user is checked in using Pakistani time
-                    $stmt = $pdo->prepare("SELECT id, check_in FROM attendance WHERE user_id = ? AND check_out IS NULL LIMIT 1");
+                    // Check if user is CURRENTLY checked in using Pakistani time
+                    $stmt = $pdo->prepare("SELECT id, check_in FROM attendance WHERE user_id = ? AND check_out IS NULL ORDER BY id DESC LIMIT 1");
                     $stmt->execute([$user['id']]);
                     $checkin = $stmt->fetch();
                     $isCheckedIn = !empty($checkin);
                     
-                    // Calculate work duration if checked in using Pakistani time
-                    $workDuration = '';
-                    if ($isCheckedIn && $checkin) {
-                        $checkinTime = new DateTime($checkin['check_in'], new DateTimeZone('Asia/Karachi'));
-                        $now = new DateTime('now', new DateTimeZone('Asia/Karachi'));
-                        $totalSeconds = $now->getTimestamp() - $checkinTime->getTimestamp();
-                        $hours = floor($totalSeconds / 3600);
-                        $minutes = floor(($totalSeconds % 3600) / 60);
-                        $workDuration = sprintf('%d:%02d', $hours, $minutes);
-                    }
-                    
-                    // Only show checked in users (unless developer viewing all)
-                    if ($isCheckedIn || ($loggedInUserRole === 'developer')) {
+                    // ONLY INCLUDE CHECKED IN USERS
+                    if ($isCheckedIn) {
+                        // Calculate work duration if checked in using Pakistani time
+                        $workDuration = '';
+                        if ($checkin) {
+                            $checkinTime = new DateTime($checkin['check_in'], new DateTimeZone('Asia/Karachi'));
+                            $now = new DateTime('now', new DateTimeZone('Asia/Karachi'));
+                            $totalSeconds = $now->getTimestamp() - $checkinTime->getTimestamp();
+                            $hours = floor($totalSeconds / 3600);
+                            $minutes = floor(($totalSeconds % 3600) / 60);
+                            $workDuration = sprintf('%d:%02d', $hours, $minutes);
+                        }
+                        
                         $locations[] = [
                             'user_id' => $user['id'],
                             'username' => $user['username'],
@@ -73,8 +72,8 @@ try {
                             'latitude' => $location['latitude'],
                             'longitude' => $location['longitude'],
                             'address' => $location['address'] ?? 'Unknown location',
-                            'is_location_enabled' => $isCheckedIn ? 1 : 0,
-                            'is_checked_in' => $isCheckedIn,
+                            'is_location_enabled' => 1,
+                            'is_checked_in' => true, // All users in this list are checked in
                             'work_duration' => $workDuration,
                             'timestamp' => getPakistaniTime('Y-m-d H:i:s'),
                             'formatted_time' => getPakistaniTime('h:i A')
@@ -88,9 +87,9 @@ try {
     error_log("Admin data fetch error: " . $e->getMessage());
 }
 
-// Get total stats using Pakistani time
+// Get total stats using Pakistani time - count only checked in users
 $totalUsers = 0;
-$checkedInUsers = 0;
+$checkedInUsers = count($locations); // All users in locations array are checked in
 $totalLocations = count($locations);
 
 // Count total users visible to current admin
@@ -100,13 +99,6 @@ if ($loggedInUserRole === 'developer') {
 } else {
     $stmt = $pdo->query("SELECT COUNT(*) as count FROM users WHERE role = 'user'");
     $totalUsers = $stmt->fetch()['count'];
-}
-
-// Count checked in users
-foreach ($locations as $location) {
-    if ($location['is_checked_in']) {
-        $checkedInUsers++;
-    }
 }
 
 echo json_encode([

@@ -1,4 +1,3 @@
-
 <?php
 // Admin tracking page improvements
 require_once 'config.php';
@@ -9,7 +8,7 @@ if (!isLoggedIn() || !isAdmin()) {
     exit;
 }
 
-// Function to get improved tracking data
+// Function to get improved tracking data - ONLY CHECKED IN USERS
 function getImprovedTrackingData() {
     global $pdo;
     
@@ -38,25 +37,25 @@ function getImprovedTrackingData() {
                             continue;
                         }
                         
-                        // Check if user is checked in
-                        $stmt = $pdo->prepare("SELECT id, check_in FROM attendance WHERE user_id = ? AND check_out IS NULL LIMIT 1");
+                        // Check if user is CURRENTLY checked in
+                        $stmt = $pdo->prepare("SELECT id, check_in FROM attendance WHERE user_id = ? AND check_out IS NULL ORDER BY id DESC LIMIT 1");
                         $stmt->execute([$user['id']]);
                         $checkin = $stmt->fetch();
                         $isCheckedIn = !empty($checkin);
                         
-                        // Calculate work duration
-                        $workDuration = '';
-                        if ($isCheckedIn && $checkin) {
-                            $checkinTime = new DateTime($checkin['check_in'], new DateTimeZone('Asia/Karachi'));
-                            $now = new DateTime('now', new DateTimeZone('Asia/Karachi'));
-                            $totalSeconds = $now->getTimestamp() - $checkinTime->getTimestamp();
-                            $hours = floor($totalSeconds / 3600);
-                            $minutes = floor(($totalSeconds % 3600) / 60);
-                            $workDuration = sprintf('%d:%02d', $hours, $minutes);
-                        }
-                        
-                        // Only include checked in users (unless developer)
-                        if ($isCheckedIn || ($loggedInUserRole === 'developer')) {
+                        // ONLY INCLUDE CHECKED IN USERS
+                        if ($isCheckedIn) {
+                            // Calculate work duration
+                            $workDuration = '';
+                            if ($checkin) {
+                                $checkinTime = new DateTime($checkin['check_in'], new DateTimeZone('Asia/Karachi'));
+                                $now = new DateTime('now', new DateTimeZone('Asia/Karachi'));
+                                $totalSeconds = $now->getTimestamp() - $checkinTime->getTimestamp();
+                                $hours = floor($totalSeconds / 3600);
+                                $minutes = floor(($totalSeconds % 3600) / 60);
+                                $workDuration = sprintf('%d:%02d', $hours, $minutes);
+                            }
+                            
                             $locations[] = [
                                 'user_id' => $user['id'],
                                 'username' => $user['username'],
@@ -66,7 +65,7 @@ function getImprovedTrackingData() {
                                 'latitude' => $location['latitude'],
                                 'longitude' => $location['longitude'],
                                 'address' => $location['address'] ?? 'Unknown location',
-                                'is_checked_in' => $isCheckedIn,
+                                'is_checked_in' => true, // All users in this response are checked in
                                 'work_duration' => $workDuration,
                                 'timestamp' => getPakistaniTime('Y-m-d H:i:s'),
                                 'formatted_time' => getPakistaniTime('h:i A'),
@@ -95,7 +94,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'get_tracking_data') {
     exit;
 }
 
-// Generate improved tracking page HTML
+// Generate improved tracking page HTML - MAP ONLY, NO DATA TABLE
 function generateTrackingPageHTML($locations) {
     $html = '
     <div class="tracking-container">
@@ -159,18 +158,9 @@ function generateTrackingPageHTML($locations) {
                 font-size: 12px;
                 font-weight: 500;
                 text-transform: uppercase;
-            }
-            
-            .status-online {
                 background: #d4edda;
                 color: #155724;
                 border: 1px solid #c3e6cb;
-            }
-            
-            .status-offline {
-                background: #f8d7da;
-                color: #721c24;
-                border: 1px solid #f5c6cb;
             }
             
             .location-details {
@@ -202,33 +192,43 @@ function generateTrackingPageHTML($locations) {
                 display: inline-flex;
                 align-items: center;
                 gap: 8px;
-                background: #1a73e8;
-                color: white;
-                padding: 10px 16px;
-                border-radius: 6px;
-                text-decoration: none;
+                background: #4285f4;
+                color: white !important;
+                padding: 12px 20px;
+                border-radius: 8px;
+                text-decoration: none !important;
                 font-size: 14px;
-                font-weight: 500;
+                font-weight: 600;
                 margin-top: 15px;
-                transition: background-color 0.2s ease;
+                transition: all 0.3s ease;
                 border: none;
                 cursor: pointer;
+                box-shadow: 0 2px 4px rgba(66, 133, 244, 0.2);
+                width: 100%;
+                justify-content: center;
             }
             
             .google-maps-btn:hover {
-                background: #1557b0;
-                color: white;
-                text-decoration: none;
+                background: #3367d6 !important;
+                color: white !important;
+                text-decoration: none !important;
+                transform: translateY(-1px);
+                box-shadow: 0 4px 8px rgba(66, 133, 244, 0.3);
             }
             
             .google-maps-btn:focus {
-                outline: 2px solid #1a73e8;
+                outline: 2px solid #4285f4;
                 outline-offset: 2px;
             }
             
+            .google-maps-btn:visited {
+                color: white !important;
+            }
+            
             .maps-icon {
-                width: 16px;
-                height: 16px;
+                width: 18px;
+                height: 18px;
+                fill: currentColor;
             }
             
             .last-updated {
@@ -269,8 +269,8 @@ function generateTrackingPageHTML($locations) {
         </style>
         
         <div class="tracking-header">
-            <h2 style="margin: 0; color: #333;">📍 Live User Tracking</h2>
-            <p style="margin: 10px 0 0 0; color: #666;">Real-time location updates • Auto-refresh every 59 seconds</p>
+            <h2 style="margin: 0; color: #333;">📍 Live User Tracking - Map View Only</h2>
+            <p style="margin: 10px 0 0 0; color: #666;">Real-time location updates • Auto-refresh every 59 seconds • Showing only checked-in users</p>
         </div>
         
         <div class="refresh-indicator" id="refresh-indicator">
@@ -287,15 +287,12 @@ function generateTrackingPageHTML($locations) {
             </div>';
     } else {
         foreach ($locations as $location) {
-            $statusClass = $location['is_checked_in'] ? 'status-online' : 'status-offline';
-            $statusText = $location['is_checked_in'] ? 'Checked In' : 'Checked Out';
-            
             $html .= '
             <div class="user-location-card">
                 <div class="user-info">
                     <div class="user-name">' . htmlspecialchars($location['full_name']) . '</div>
                     <div class="user-username">@' . htmlspecialchars($location['username']) . '</div>
-                    <span class="status-badge ' . $statusClass . '">' . $statusText . '</span>
+                    <span class="status-badge">Checked In</span>
                 </div>
                 
                 <div class="location-details">
@@ -330,7 +327,7 @@ function generateTrackingPageHTML($locations) {
                     <svg class="maps-icon" viewBox="0 0 24 24" fill="currentColor">
                         <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/>
                     </svg>
-                    Open in Google Maps
+                    📍 Open in Google Maps
                 </a>
             </div>';
         }
@@ -457,7 +454,7 @@ function generateTrackingPageHTML($locations) {
                     <svg class="maps-icon" viewBox="0 0 24 24" fill="currentColor">
                         <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/>
                     </svg>
-                    Open in Google Maps
+                    📍 Open in Google Maps
                 </a>
             `;
             

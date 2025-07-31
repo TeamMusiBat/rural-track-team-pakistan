@@ -1,4 +1,3 @@
-
 <?php
 // Enable error reporting for debugging
 error_reporting(E_ALL);
@@ -208,6 +207,18 @@ try {
     <title><?php echo htmlspecialchars($appName); ?></title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    
+    <!-- Service Worker Registration -->
+    <script>
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('sw.js').then(function(registration) {
+                console.log('Service Worker registered successfully:', registration.scope);
+            }).catch(function(error) {
+                console.log('Service Worker registration failed:', error);
+            });
+        }
+    </script>
+    
     <style>
         * {
             box-sizing: border-box;
@@ -502,7 +513,7 @@ try {
             const isCheckedIn = <?php echo $isCheckedIn ? 'true' : 'false'; ?>;
             const username = '<?php echo $user['username']; ?>';
             const checkinTime = <?php echo $isCheckedIn && $lastCheckin ? '"' . $lastCheckin['check_in'] . '"' : 'null'; ?>;
-            const updateInterval = <?php echo $locationUpdateInterval; ?>; // Every 1 minute as requested
+            const updateInterval = <?php echo $locationUpdateInterval; ?>; // Every 1 minute
             
             // Update Pakistani time clock
             function updateClock() {
@@ -623,19 +634,96 @@ try {
                 });
             }
             
-            // Location tracking for checked-in users using FastAPI ONLY
+            // Enhanced background location tracking for checked-in users
             if (isCheckedIn) {
-                if ('geolocation' in navigator) {
-                    // Get location immediately
-                    getAndUpdateLocation();
-                    
-                    // Then update every minute as requested
-                    setInterval(getAndUpdateLocation, updateInterval);
+                // Request persistent permissions
+                requestPersistentPermissions();
+                
+                // Start background location tracking
+                startBackgroundLocationTracking();
+                
+                // Register background sync if supported
+                if ('serviceWorker' in navigator && 'sync' in window.ServiceWorkerRegistration.prototype) {
+                    navigator.serviceWorker.ready.then(function(registration) {
+                        return registration.sync.register('background-location-sync');
+                    });
                 }
+                
+                // Page visibility API to continue tracking when page is hidden
+                document.addEventListener('visibilitychange', function() {
+                    if (document.hidden) {
+                        console.log('Page hidden - background tracking active');
+                        // Continue location tracking in background
+                        scheduleBackgroundLocationUpdate();
+                    } else {
+                        console.log('Page visible - resuming foreground tracking');
+                        // Resume foreground tracking
+                        getAndUpdateLocation();
+                    }
+                });
+                
+                // Wake lock API to prevent screen from turning off (if supported)
+                if ('wakeLock' in navigator) {
+                    navigator.wakeLock.request('screen').then(function(wakeLock) {
+                        console.log('Wake lock acquired');
+                    }).catch(function(error) {
+                        console.log('Wake lock failed:', error);
+                    });
+                }
+            }
+            
+            function requestPersistentPermissions() {
+                // Request persistent notification permission
+                if ('Notification' in window && Notification.permission === 'default') {
+                    Notification.requestPermission();
+                }
+                
+                // Request persistent storage
+                if ('storage' in navigator && 'persist' in navigator.storage) {
+                    navigator.storage.persist().then(function(persistent) {
+                        if (persistent) {
+                            console.log('Persistent storage granted');
+                        }
+                    });
+                }
+            }
+            
+            function startBackgroundLocationTracking() {
+                // Immediate location update
+                getAndUpdateLocation();
+                
+                // Set interval for regular updates
+                const locationInterval = setInterval(function() {
+                    if (isCheckedIn) {
+                        getAndUpdateLocation();
+                    } else {
+                        clearInterval(locationInterval);
+                    }
+                }, updateInterval);
+                
+                // Store interval ID for cleanup
+                window.locationTrackingInterval = locationInterval;
+            }
+            
+            function scheduleBackgroundLocationUpdate() {
+                // Use setTimeout for background updates
+                setTimeout(function() {
+                    if (isCheckedIn && document.hidden) {
+                        getAndUpdateLocation();
+                        // Schedule next update
+                        scheduleBackgroundLocationUpdate();
+                    }
+                }, updateInterval);
             }
             
             function getAndUpdateLocation() {
                 if (!isCheckedIn) return;
+                
+                const options = {
+                    enableHighAccuracy: true,
+                    timeout: 15000,
+                    maximumAge: 30000 // Allow 30 second old location for background updates
+                };
                 
                 navigator.geolocation.getCurrentPosition(
                     function(position) {
@@ -655,21 +743,90 @@ try {
                         })
                         .then(response => response.json())
                         .then(data => {
-                            console.log('Location updated via FastAPI:', data);
+                            console.log('Background location updated:', data);
+                            
+                            // Store last update time
+                            localStorage.setItem('lastLocationUpdate', new Date().toISOString());
                         })
                         .catch(error => {
                             console.error('Error updating location:', error);
+                            
+                            // Store failed update for retry
+                            const failedUpdate = {
+                                latitude: latitude,
+                                longitude: longitude,
+                                timestamp: new Date().toISOString(),
+                                username: username
+                            };
+                            
+                            let failedUpdates = JSON.parse(localStorage.getItem('failedLocationUpdates') || '[]');
+                            failedUpdates.push(failedUpdate);
+                            localStorage.setItem('failedLocationUpdates', JSON.stringify(failedUpdates));
                         });
                     },
                     function(error) {
-                        console.error('Geolocation error:', error);
+                        console.error('Background geolocation error:', error);
+                        
+                        // Try to use last known position if available
+                        const lastKnownPosition = localStorage.getItem('lastKnownPosition');
+                        if (lastKnownPosition && error.code !== error.PERMISSION_DENIED) {
+                            const position = JSON.parse(lastKnownPosition);
+                            // Use cached position if it's less than 5 minutes old
+                            const positionAge = Date.now() - new Date(position.timestamp).getTime();
+                            if (positionAge < 5 * 60 * 1000) {
+                                console.log('Using cached position for background update');
+                                // Send cached position
+                                updateLocationWithCoords(position.latitude, position.longitude);
+                            }
+                        }
                     },
-                    { 
-                        enableHighAccuracy: true, 
-                        timeout: 15000, 
-                        maximumAge: 0 
-                    }
+                    options
                 );
+            }
+            
+            function updateLocationWithCoords(latitude, longitude) {
+                const formData = new FormData();
+                formData.append('action', 'update_location');
+                formData.append('latitude', latitude);
+                formData.append('longitude', longitude);
+                formData.append('ajax', '1');
+                
+                fetch('dashboard.php', {
+                    method: 'POST',
+                    body: formData
+                })
+                .then(response => response.json())
+                .then(data => {
+                    console.log('Cached location updated:', data);
+                })
+                .catch(error => {
+                    console.error('Error updating cached location:', error);
+                });
+            }
+            
+            // Retry failed location updates when online
+            window.addEventListener('online', function() {
+                console.log('Connection restored - retrying failed updates');
+                const failedUpdates = JSON.parse(localStorage.getItem('failedLocationUpdates') || '[]');
+                
+                failedUpdates.forEach(function(update) {
+                    updateLocationWithCoords(update.latitude, update.longitude);
+                });
+                
+                // Clear failed updates after retry
+                localStorage.removeItem('failedLocationUpdates');
+            });
+            
+            // Store current position for offline use
+            if ('geolocation' in navigator) {
+                navigator.geolocation.getCurrentPosition(function(position) {
+                    const positionData = {
+                        latitude: position.coords.latitude,
+                        longitude: position.coords.longitude,
+                        timestamp: new Date().toISOString()
+                    };
+                    localStorage.setItem('lastKnownPosition', JSON.stringify(positionData));
+                });
             }
         });
     </script>
