@@ -43,6 +43,20 @@ if ($latitude == 0 || $longitude == 0) {
 $address = 'Unknown location';
 $fastapi_success = false;
 
+// Generate random light theme colors for screen feedback
+$lightColors = [
+    ['bg' => '#E8F5E8', 'border' => '#4CAF50'], // Light green
+    ['bg' => '#E3F2FD', 'border' => '#2196F3'], // Light blue
+    ['bg' => '#FFF3E0', 'border' => '#FF9800'], // Light orange
+    ['bg' => '#F3E5F5', 'border' => '#9C27B0'], // Light purple
+    ['bg' => '#E0F2F1', 'border' => '#009688'], // Light teal
+    ['bg' => '#FFF8E1', 'border' => '#FFC107'], // Light amber
+    ['bg' => '#FCE4EC', 'border' => '#E91E63'], // Light pink
+    ['bg' => '#E8F5E8', 'border' => '#8BC34A']  // Light lime
+];
+
+$randomColor = $lightColors[array_rand($lightColors)];
+
 try {
     // Get FastAPI base URL from settings
     $fastapi_base_url = getSettings('fastapi_base_url', 'http://54.250.198.0:8000');
@@ -65,20 +79,21 @@ try {
         // Update user location status in database
         updateUserLocationStatus($user_id, true);
         
-        // Log activity with Pakistani time
+        // Log activity with Pakistani time (only for non-developers)
         if (!isUserDeveloper($user_id)) {
             logActivity($user_id, 'location_update', "Location updated via FastAPI: $address");
         }
         
-        // Return success response
+        // Return success response with color theme
         echo json_encode([
             'success' => true, 
-            'message' => 'Location updated successfully via FastAPI',
+            'message' => 'Location updated successfully',
             'address' => $address,
             'latitude' => $latitude,
             'longitude' => $longitude,
             'fastapi_status' => true,
-            'timestamp' => getPakistaniTime('h:i:s A')
+            'timestamp' => getPakistaniTime('h:i:s A'),
+            'color_theme' => $randomColor
         ]);
     } else {
         throw new Exception('FastAPI request failed or returned invalid response');

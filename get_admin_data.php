@@ -45,7 +45,7 @@ try {
                         continue; // Skip developers and masters for master users
                     }
                     
-                    // Check if user is checked in
+                    // Check if user is checked in using Pakistani time
                     $stmt = $pdo->prepare("SELECT id, check_in FROM attendance WHERE user_id = ? AND check_out IS NULL LIMIT 1");
                     $stmt->execute([$user['id']]);
                     $checkin = $stmt->fetch();
