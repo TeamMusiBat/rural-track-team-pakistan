@@ -22,20 +22,21 @@ try {
         redirect('index.php?error=user_not_found');
     }
 
+    // CRITICAL: Check if master or developer - redirect to admin panel IMMEDIATELY
+    if ($user['role'] === 'master' || $user['role'] === 'developer') {
+        redirect('admin.php?tab=dashboard');
+        exit; // Ensure no further execution
+    }
+
     // Check device lock ONLY for users with role 'user' (NEVER for masters or developers)
     if ($user['role'] === 'user' && checkDeviceLock($user_id)) {
         session_destroy();
         redirect('index.php?error=device_locked');
     }
 
-    // If master user, redirect to admin panel (masters don't need checkin)
-    if ($user['role'] === 'master') {
-        redirect('admin.php?tab=dashboard');
-    }
-
     // Function to determine if user needs to check in
     function userNeedsToCheckIn($role) {
-        // Masters and developers NEVER need to check in
+        // Masters and developers NEVER need to check in - they should be redirected already
         if ($role === 'master' || $role === 'developer') {
             return false;
         }

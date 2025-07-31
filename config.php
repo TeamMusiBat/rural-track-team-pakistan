@@ -1,4 +1,3 @@
-
 <?php
 // FORCE Pakistani timezone as default for ALL operations
 date_default_timezone_set('Asia/Karachi');
@@ -46,6 +45,10 @@ function isDeveloper() {
     return getUserRole() === 'developer';
 }
 
+function isMaster() {
+    return getUserRole() === 'master';
+}
+
 function redirect($url) {
     header("Location: $url");
     exit;
@@ -75,7 +78,7 @@ function incrementDbRequest($request_type = 'general', $user_id = null) {
     }
 }
 
-// Device tracking functions - NEVER FOR MASTERS OR DEVELOPERS
+// Device tracking functions - ABSOLUTELY NEVER FOR MASTERS OR DEVELOPERS
 function getDeviceId() {
     $userAgent = $_SERVER['HTTP_USER_AGENT'] ?? '';
     $ip = $_SERVER['REMOTE_ADDR'] ?? '';
@@ -91,14 +94,14 @@ function checkDeviceLock($user_id) {
         $stmt->execute([$user_id]);
         $user = $stmt->fetch();
         
-        // ABSOLUTELY NEVER lock master or developer accounts
+        // ABSOLUTELY NEVER EVER lock master or developer accounts
         if (!$user || $user['role'] === 'master' || $user['role'] === 'developer') {
-            return false; // NEVER lock these roles
+            return false; // NEVER lock these roles - CRITICAL
         }
         
         // ONLY check device lock for regular users with role 'user'
         if ($user['role'] !== 'user') {
-            return false;
+            return false; // Only regular users can be device locked
         }
         
         incrementDbRequest('device_check', $user_id);
@@ -146,17 +149,19 @@ function flagUser($user_id, $reason) {
     global $pdo;
     
     try {
-        // Double check - NEVER flag masters or developers
+        // Triple check - ABSOLUTELY NEVER flag masters or developers
         $stmt = $pdo->prepare("SELECT role FROM users WHERE id = ?");
         $stmt->execute([$user_id]);
         $user = $stmt->fetch();
         
         if ($user && ($user['role'] === 'master' || $user['role'] === 'developer')) {
+            error_log("CRITICAL: Attempted to flag master/developer user ID: $user_id - BLOCKED");
             return; // ABSOLUTELY DO NOT flag masters or developers
         }
         
         incrementDbRequest('flag_user', $user_id);
         
+        // Only flag users with role 'user'
         $stmt = $pdo->prepare("UPDATE users SET device_locked = 1, flagged_reason = ? WHERE id = ? AND role = 'user'");
         $stmt->execute([$reason, $user_id]);
         
@@ -200,6 +205,23 @@ function isUserDeveloper($user_id) {
         return $user && $user['role'] === 'developer';
     } catch (Exception $e) {
         error_log("Check user developer error: " . $e->getMessage());
+        return false;
+    }
+}
+
+function isUserMaster($user_id) {
+    global $pdo;
+    
+    try {
+        incrementDbRequest('user_check', $user_id);
+        
+        $stmt = $pdo->prepare("SELECT role FROM users WHERE id = ?");
+        $stmt->execute([$user_id]);
+        $user = $stmt->fetch();
+        
+        return $user && $user['role'] === 'master';
+    } catch (Exception $e) {
+        error_log("Check user master error: " . $e->getMessage());
         return false;
     }
 }
