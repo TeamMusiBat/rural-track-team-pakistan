@@ -1,6 +1,8 @@
+
 <?php
-// Set Pakistani timezone as default
+// FORCE Pakistani timezone as default for ALL operations
 date_default_timezone_set('Asia/Karachi');
+ini_set('date.timezone', 'Asia/Karachi');
 
 // Database configuration
 $host = "localhost";
@@ -8,11 +10,15 @@ $dbname = "u696686061_smartort";
 $username = "u696686061_smartort";
 $password = "Atifkhan83##";
 
-// Create connection
+// Create connection with Pakistani timezone
 try {
     $pdo = new PDO("mysql:host=$host;dbname=$dbname", $username, $password);
     $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
     $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+    
+    // Force MySQL to use Pakistani timezone
+    $pdo->exec("SET time_zone = '+05:00'");
+    $pdo->exec("SET SESSION time_zone = '+05:00'");
 } catch(PDOException $e) {
     die("Connection failed: " . $e->getMessage());
 }
@@ -45,13 +51,21 @@ function redirect($url) {
     exit;
 }
 
+// Get Pakistani time function
+function getPakistaniTime($format = 'Y-m-d H:i:s') {
+    $tz = new DateTimeZone('Asia/Karachi');
+    $dt = new DateTime('now', $tz);
+    return $dt->format($format);
+}
+
 // Database request counter
 function incrementDbRequest($request_type = 'general', $user_id = null) {
     global $pdo;
     
     try {
-        $stmt = $pdo->prepare("INSERT INTO db_requests (request_type, user_id, timestamp) VALUES (?, ?, NOW())");
-        $stmt->execute([$request_type, $user_id]);
+        $pakistani_time = getPakistaniTime();
+        $stmt = $pdo->prepare("INSERT INTO db_requests (request_type, user_id, timestamp) VALUES (?, ?, ?)");
+        $stmt->execute([$request_type, $user_id, $pakistani_time]);
         
         // Update settings counter
         $stmt = $pdo->prepare("UPDATE settings SET value = value + 1 WHERE name = 'db_request_count'");
@@ -61,7 +75,7 @@ function incrementDbRequest($request_type = 'general', $user_id = null) {
     }
 }
 
-// Device tracking functions - ONLY FOR REGULAR USERS, NEVER FOR MASTERS OR DEVELOPERS
+// Device tracking functions - NEVER FOR MASTERS OR DEVELOPERS
 function getDeviceId() {
     $userAgent = $_SERVER['HTTP_USER_AGENT'] ?? '';
     $ip = $_SERVER['REMOTE_ADDR'] ?? '';
@@ -72,17 +86,17 @@ function checkDeviceLock($user_id) {
     global $pdo;
     
     try {
-        // Get user role first
-        $stmt = $pdo->prepare("SELECT role FROM users WHERE id = ?");
+        // Get user role first - CRITICAL CHECK
+        $stmt = $pdo->prepare("SELECT role, username FROM users WHERE id = ?");
         $stmt->execute([$user_id]);
         $user = $stmt->fetch();
         
-        // NEVER EVER lock master or developer accounts - return false immediately
+        // ABSOLUTELY NEVER lock master or developer accounts
         if (!$user || $user['role'] === 'master' || $user['role'] === 'developer') {
-            return false;
+            return false; // NEVER lock these roles
         }
         
-        // Only check device lock for regular users with role 'user'
+        // ONLY check device lock for regular users with role 'user'
         if ($user['role'] !== 'user') {
             return false;
         }
@@ -115,14 +129,14 @@ function checkDeviceLock($user_id) {
             return true;
         }
         
-        // Record current device
-        $stmt = $pdo->prepare("INSERT INTO device_tracking (user_id, device_id, ip_address, user_agent, login_time) VALUES (?, ?, ?, ?, NOW()) ON DUPLICATE KEY UPDATE login_time = NOW(), is_active = 1");
-        $stmt->execute([$user_id, $currentDeviceId, $currentIp, $currentUserAgent]);
+        // Record current device with Pakistani time
+        $pakistani_time = getPakistaniTime();
+        $stmt = $pdo->prepare("INSERT INTO device_tracking (user_id, device_id, ip_address, user_agent, login_time) VALUES (?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE login_time = ?, is_active = 1");
+        $stmt->execute([$user_id, $currentDeviceId, $currentIp, $currentUserAgent, $pakistani_time, $pakistani_time]);
         
         return false;
         
     } catch (Exception $e) {
-        // If there's any error in device checking, don't lock the user
         error_log("Device lock check error: " . $e->getMessage());
         return false;
     }
@@ -132,13 +146,13 @@ function flagUser($user_id, $reason) {
     global $pdo;
     
     try {
-        // Double check - never flag masters or developers
+        // Double check - NEVER flag masters or developers
         $stmt = $pdo->prepare("SELECT role FROM users WHERE id = ?");
         $stmt->execute([$user_id]);
         $user = $stmt->fetch();
         
         if ($user && ($user['role'] === 'master' || $user['role'] === 'developer')) {
-            return; // Don't flag masters or developers
+            return; // ABSOLUTELY DO NOT flag masters or developers
         }
         
         incrementDbRequest('flag_user', $user_id);
@@ -164,9 +178,10 @@ function logActivity($user_id, $activity_type, $description = "") {
         incrementDbRequest('activity_log', $user_id);
         
         $ip = $_SERVER['REMOTE_ADDR'] ?? 'Unknown';
+        $pakistani_time = getPakistaniTime();
         
-        $stmt = $pdo->prepare("INSERT INTO activity_logs (user_id, activity_type, description, ip_address, timestamp) VALUES (?, ?, ?, ?, NOW())");
-        $stmt->execute([$user_id, $activity_type, $description, $ip]);
+        $stmt = $pdo->prepare("INSERT INTO activity_logs (user_id, activity_type, description, ip_address, timestamp) VALUES (?, ?, ?, ?, ?)");
+        $stmt->execute([$user_id, $activity_type, $description, $ip, $pakistani_time]);
     } catch (Exception $e) {
         error_log("Log activity error: " . $e->getMessage());
     }
@@ -237,8 +252,8 @@ function updateSettings($name, $value) {
     }
 }
 
-// FastAPI configuration
-$fastapi_base_url = 'http://54.250.198.0:8000';
+// FastAPI configuration - configurable via admin
+$fastapi_base_url = getSettings('fastapi_base_url', 'http://54.250.198.0:8000');
 
 // Function to make FastAPI requests
 function makeApiRequest($url, $method = 'GET', $data = null) {
@@ -281,7 +296,7 @@ function updateUserLocationStatus($user_id, $status) {
     }
 }
 
-// Auto checkout functions (with Pakistani time)
+// Auto checkout functions using Pakistani time
 function autoCheckoutAtEndOfDay() {
     global $pdo;
     
@@ -307,15 +322,16 @@ function autoCheckoutAtEndOfDay() {
                     continue;
                 }
                 
-                // Calculate duration in minutes
+                // Calculate duration in minutes using Pakistani time
                 $checkinTime = new DateTime($checkIn['check_in'], new DateTimeZone('Asia/Karachi'));
                 $checkout_time = new DateTime('now', new DateTimeZone('Asia/Karachi'));
                 $duration = $checkout_time->getTimestamp() - $checkinTime->getTimestamp();
                 $duration_minutes = round($duration / 60);
                 
-                // Perform check-out
-                $stmt = $pdo->prepare("UPDATE attendance SET check_out = NOW(), duration_minutes = ? WHERE id = ?");
-                $stmt->execute([$duration_minutes, $checkIn['id']]);
+                // Perform check-out with Pakistani time
+                $pakistani_checkout = getPakistaniTime();
+                $stmt = $pdo->prepare("UPDATE attendance SET check_out = ?, duration_minutes = ? WHERE id = ?");
+                $stmt->execute([$pakistani_checkout, $duration_minutes, $checkIn['id']]);
                 
                 // Disable location tracking for this user
                 updateUserLocationStatus($checkIn['user_id'], false);
@@ -361,15 +377,16 @@ function autoCheckoutAfterHours() {
                 continue;
             }
             
-            // Calculate how long they've been checked in
+            // Calculate how long they've been checked in using Pakistani time
             $checkinTime = new DateTime($checkIn['check_in'], new DateTimeZone('Asia/Karachi'));
             $hoursActive = ($now->getTimestamp() - $checkinTime->getTimestamp()) / 3600;
             
             if ($hoursActive >= $autoCheckoutHours) {
                 $duration_minutes = round($hoursActive * 60);
                 
-                $stmt = $pdo->prepare("UPDATE attendance SET check_out = NOW(), duration_minutes = ? WHERE id = ?");
-                $stmt->execute([$duration_minutes, $checkIn['id']]);
+                $pakistani_checkout = getPakistaniTime();
+                $stmt = $pdo->prepare("UPDATE attendance SET check_out = ?, duration_minutes = ? WHERE id = ?");
+                $stmt->execute([$pakistani_checkout, $duration_minutes, $checkIn['id']]);
                 
                 updateUserLocationStatus($checkIn['user_id'], false);
                 
@@ -381,7 +398,7 @@ function autoCheckoutAfterHours() {
     }
 }
 
-// Function to get attendance data for charts
+// Function to get attendance data for charts using Pakistani time
 function getAttendanceData($start_date = null, $end_date = null) {
     global $pdo;
     
@@ -422,7 +439,7 @@ function getAttendanceData($start_date = null, $end_date = null) {
 // Initialize settings if they don't exist
 try {
     if (!getSettings('app_name')) {
-        updateSettings('app_name', 'SmartOutreach');
+        updateSettings('app_name', 'SmartORT');
     }
     
     if (!getSettings('default_position')) {
@@ -430,7 +447,7 @@ try {
     }
     
     if (!getSettings('location_update_interval')) {
-        updateSettings('location_update_interval', '300');
+        updateSettings('location_update_interval', '60'); // 1 minute as requested
     }
     
     if (!getSettings('db_request_count')) {
@@ -438,7 +455,11 @@ try {
     }
     
     if (!getSettings('master_checkin_required')) {
-        updateSettings('master_checkin_required', '0');
+        updateSettings('master_checkin_required', '0'); // Masters don't need checkin
+    }
+    
+    if (!getSettings('fastapi_base_url')) {
+        updateSettings('fastapi_base_url', 'http://54.250.198.0:8000');
     }
 } catch (PDOException $e) {
     error_log("Settings initialization error: " . $e->getMessage());

@@ -1,3 +1,4 @@
+
 <?php
 // Enable error reporting for debugging
 error_reporting(E_ALL);
@@ -22,30 +23,29 @@ try {
         redirect('index.php?error=user_not_found');
     }
 
-    // Check device lock ONLY for users with role 'user' (never for masters or developers)
+    // Check device lock ONLY for users with role 'user' (NEVER for masters or developers)
     if ($user['role'] === 'user' && checkDeviceLock($user_id)) {
         session_destroy();
         redirect('index.php?error=device_locked');
     }
 
-    // If master user, redirect to admin panel (no checkin required for masters)
+    // If master user, redirect to admin panel (masters don't need checkin)
     if ($user['role'] === 'master') {
         redirect('admin.php?tab=dashboard');
     }
 
-    // Check if the user needs to check in based on role
+    // Function to determine if user needs to check in
     function userNeedsToCheckIn($role) {
-        // Masters don't need to check in
-        if ($role === 'master') {
+        // Masters and developers NEVER need to check in
+        if ($role === 'master' || $role === 'developer') {
             return false;
         }
         
-        // Users need to check in
+        // Regular users need to check in
         if ($role === 'user') {
             return true;
         }
         
-        // Developers don't need to check in
         return false;
     }
 
@@ -55,9 +55,9 @@ try {
     $lastCheckin = getLastCheckin($user_id);
     $isCheckedIn = !empty($lastCheckin);
 
-    // If checked in, calculate duration using Pakistani time - FIX FOR REAL-TIME CALCULATION
+    // Calculate real-time duration using Pakistani time
     $checkinDuration = '';
-    if ($isCheckedIn) {
+    if ($isCheckedIn && $lastCheckin) {
         $checkinTime = new DateTime($lastCheckin['check_in'], new DateTimeZone('Asia/Karachi'));
         $now = new DateTime('now', new DateTimeZone('Asia/Karachi'));
         
@@ -68,13 +68,14 @@ try {
         $checkinDuration = sprintf('%d:%02d', $hours, $minutes);
     }
 
-    // Handle check-in/check-out
+    // Handle check-in/check-out and location updates
     if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (isset($_POST['action'])) {
             if ($_POST['action'] === 'checkin' && !$isCheckedIn && $needsToCheckIn) {
-                // Perform check-in
-                $stmt = $pdo->prepare("INSERT INTO attendance (user_id, check_in) VALUES (?, NOW())");
-                $stmt->execute([$user_id]);
+                // Perform check-in with Pakistani time
+                $pakistani_time = getPakistaniTime();
+                $stmt = $pdo->prepare("INSERT INTO attendance (user_id, check_in) VALUES (?, ?)");
+                $stmt->execute([$user_id, $pakistani_time]);
                 
                 if (!isUserDeveloper($user_id)) {
                     logActivity($user_id, 'check_in', 'User checked in');
@@ -83,17 +84,25 @@ try {
                 // Update user location status
                 updateUserLocationStatus($user_id, true);
                 
+                // Return JSON for AJAX
+                if (isset($_POST['ajax']) && $_POST['ajax'] == 1) {
+                    header('Content-Type: application/json');
+                    echo json_encode(['success' => true, 'message' => 'Checked in successfully']);
+                    exit;
+                }
+                
                 redirect('dashboard.php');
             } 
             else if ($_POST['action'] === 'checkout' && $isCheckedIn) {
-                // Calculate duration in minutes using Pakistani time - FIX PRECISION ISSUE
+                // Calculate duration in minutes using Pakistani time
                 $checkinTime = new DateTime($lastCheckin['check_in'], new DateTimeZone('Asia/Karachi'));
                 $now = new DateTime('now', new DateTimeZone('Asia/Karachi'));
                 $duration_minutes = intval(($now->getTimestamp() - $checkinTime->getTimestamp()) / 60);
                 
-                // Perform check-out
-                $stmt = $pdo->prepare("UPDATE attendance SET check_out = NOW(), duration_minutes = ? WHERE id = ?");
-                $stmt->execute([$duration_minutes, $lastCheckin['id']]);
+                // Perform check-out with Pakistani time
+                $pakistani_checkout = getPakistaniTime();
+                $stmt = $pdo->prepare("UPDATE attendance SET check_out = ?, duration_minutes = ? WHERE id = ?");
+                $stmt->execute([$pakistani_checkout, $duration_minutes, $lastCheckin['id']]);
                 
                 if (!isUserDeveloper($user_id)) {
                     logActivity($user_id, 'check_out', "User checked out. Duration: $duration_minutes minutes");
@@ -102,16 +111,24 @@ try {
                 // Update user location status
                 updateUserLocationStatus($user_id, false);
                 
+                // Return JSON for AJAX
+                if (isset($_POST['ajax']) && $_POST['ajax'] == 1) {
+                    header('Content-Type: application/json');
+                    echo json_encode(['success' => true, 'message' => 'Checked out successfully']);
+                    exit;
+                }
+                
                 redirect('dashboard.php');
             }
             else if ($_POST['action'] === 'update_location' && $isCheckedIn) {
-                // Update location using FastAPI ONLY - FIX JSON RESPONSE ISSUE
+                // Update location using FastAPI ONLY
                 $latitude = floatval($_POST['latitude'] ?? 0);
                 $longitude = floatval($_POST['longitude'] ?? 0);
                 
                 if ($latitude != 0 && $longitude != 0) {
                     try {
                         // Call FastAPI to update location
+                        $fastapi_base_url = getSettings('fastapi_base_url', 'http://54.250.198.0:8000');
                         $api_url = $fastapi_base_url . "/update_location/{$user['username']}/{$longitude}_{$latitude}";
                         $response = makeApiRequest($api_url, 'POST');
                         
@@ -120,11 +137,9 @@ try {
                             updateUserLocationStatus($user_id, true);
                             
                             // Return success for AJAX calls
-                            if (isset($_POST['ajax']) && $_POST['ajax'] == 1) {
-                                header('Content-Type: application/json');
-                                echo json_encode(['success' => true, 'message' => 'Location updated successfully']);
-                                exit;
-                            }
+                            header('Content-Type: application/json');
+                            echo json_encode(['success' => true, 'message' => 'Location updated successfully']);
+                            exit;
                         } else {
                             throw new Exception('FastAPI request failed');
                         }
@@ -132,30 +147,37 @@ try {
                         // Log error and return proper JSON response
                         error_log("Location update error: " . $e->getMessage());
                         
-                        if (isset($_POST['ajax']) && $_POST['ajax'] == 1) {
-                            header('Content-Type: application/json');
-                            echo json_encode(['success' => false, 'message' => 'Failed to update location: ' . $e->getMessage()]);
-                            exit;
-                        }
+                        header('Content-Type: application/json');
+                        echo json_encode(['success' => false, 'message' => 'Failed to update location: ' . $e->getMessage()]);
+                        exit;
                     }
                 } else {
                     // Return error for AJAX calls
-                    if (isset($_POST['ajax']) && $_POST['ajax'] == 1) {
-                        header('Content-Type: application/json');
-                        echo json_encode(['success' => false, 'message' => 'Invalid location data']);
-                        exit;
-                    }
+                    header('Content-Type: application/json');
+                    echo json_encode(['success' => false, 'message' => 'Invalid location data']);
+                    exit;
                 }
             }
         }
     }
 
     // Get app name from settings
-    $appName = getSettings('app_name', 'SmartOutreach');
-    $locationUpdateInterval = intval(getSettings('location_update_interval', '300')) * 1000; // Convert to milliseconds - FIX PRECISION
+    $appName = getSettings('app_name', 'SmartORT');
+    $locationUpdateInterval = intval(getSettings('location_update_interval', '60')) * 1000; // Convert to milliseconds
 
     // Get current Pakistani time
     $currentTime = new DateTime('now', new DateTimeZone('Asia/Karachi'));
+
+    // Generate random color for dashboard
+    $dashboardColors = [
+        ['bg' => '#4f46e5', 'accent' => '#6366f1'],
+        ['bg' => '#059669', 'accent' => '#10b981'],
+        ['bg' => '#dc2626', 'accent' => '#ef4444'],
+        ['bg' => '#7c3aed', 'accent' => '#8b5cf6'],
+        ['bg' => '#ea580c', 'accent' => '#f97316'],
+        ['bg' => '#0891b2', 'accent' => '#06b6d4'],
+    ];
+    $randomColor = $dashboardColors[array_rand($dashboardColors)];
 
 } catch (Exception $e) {
     // Log the error and show user-friendly message
@@ -201,7 +223,7 @@ try {
         }
         
         .header {
-            background-color: #4f46e5;
+            background: linear-gradient(135deg, <?php echo $randomColor['bg']; ?>, <?php echo $randomColor['accent']; ?>);
             color: white;
             padding: 20px;
             text-align: center;
@@ -235,8 +257,8 @@ try {
         }
         
         .card-header-icon {
-            background-color: #eef3ff;
-            color: #4f46e5;
+            background-color: <?php echo $randomColor['bg']; ?>20;
+            color: <?php echo $randomColor['bg']; ?>;
             width: 36px;
             height: 36px;
             border-radius: 8px;
@@ -268,7 +290,7 @@ try {
             background-color: #f8fafc;
             padding: 16px;
             border-radius: 8px;
-            border-left: 4px solid #4f46e5;
+            border-left: 4px solid <?php echo $randomColor['bg']; ?>;
         }
         
         .info-label {
@@ -353,7 +375,7 @@ try {
         }
         
         .admin-link i {
-            color: #4f46e5;
+            color: <?php echo $randomColor['bg']; ?>;
             margin-right: 12px;
             font-size: 16px;
             width: 20px;
@@ -363,7 +385,7 @@ try {
         .clock {
             font-size: 18px;
             font-weight: 600;
-            color: #4f46e5;
+            color: <?php echo $randomColor['bg']; ?>;
         }
         
         .footer {
@@ -436,19 +458,13 @@ try {
                 
                 <?php if ($needsToCheckIn): ?>
                     <?php if (!$isCheckedIn): ?>
-                    <form method="POST" action="">
-                        <input type="hidden" name="action" value="checkin">
-                        <button type="submit" class="action-button check-in">
-                            <i class="fas fa-sign-in-alt"></i> Check In
-                        </button>
-                    </form>
+                    <button type="button" id="checkin-btn" class="action-button check-in">
+                        <i class="fas fa-sign-in-alt"></i> Check In
+                    </button>
                     <?php else: ?>
-                    <form method="POST" action="">
-                        <input type="hidden" name="action" value="checkout">
-                        <button type="submit" class="action-button check-out">
-                            <i class="fas fa-sign-out-alt"></i> Check Out
-                        </button>
-                    </form>
+                    <button type="button" id="checkout-btn" class="action-button check-out">
+                        <i class="fas fa-sign-out-alt"></i> Check Out
+                    </button>
                     <?php endif; ?>
                 <?php endif; ?>
                 
@@ -485,22 +501,21 @@ try {
         document.addEventListener('DOMContentLoaded', function() {
             const isCheckedIn = <?php echo $isCheckedIn ? 'true' : 'false'; ?>;
             const username = '<?php echo $user['username']; ?>';
-            const checkinTime = <?php echo $isCheckedIn ? '"' . $lastCheckin['check_in'] . '"' : 'null'; ?>;
-            const updateInterval = <?php echo $locationUpdateInterval; ?>;
+            const checkinTime = <?php echo $isCheckedIn && $lastCheckin ? '"' . $lastCheckin['check_in'] . '"' : 'null'; ?>;
+            const updateInterval = <?php echo $locationUpdateInterval; ?>; // Every 1 minute as requested
             
             // Update Pakistani time clock
             function updateClock() {
                 const now = new Date();
-                // Convert to Pakistani time
                 const pakistaniTime = new Date(now.toLocaleString("en-US", {timeZone: "Asia/Karachi"}));
                 const timeString = pakistaniTime.toLocaleTimeString('en-US', {hour12: true});
                 document.getElementById('current-time').textContent = timeString;
             }
             
-            // Update work duration in real-time - FIX FOR REAL-TIME DURATION
+            // Update work duration in real-time using Pakistani time
             function updateWorkDuration() {
                 if (isCheckedIn && checkinTime) {
-                    const checkin = new Date(checkinTime + ' PKT'); // Add PKT timezone
+                    const checkin = new Date(checkinTime);
                     const now = new Date();
                     const pakistaniNow = new Date(now.toLocaleString("en-US", {timeZone: "Asia/Karachi"}));
                     
@@ -521,13 +536,100 @@ try {
             updateClock();
             updateWorkDuration();
             
+            // Check-in button handler
+            const checkinBtn = document.getElementById('checkin-btn');
+            if (checkinBtn) {
+                checkinBtn.addEventListener('click', async function() {
+                    // Request location permission first
+                    if ('geolocation' in navigator) {
+                        try {
+                            const permission = await navigator.permissions.query({name: 'geolocation'});
+                            if (permission.state === 'denied') {
+                                alert('Location permission is required for check-in. Please enable location access.');
+                                return;
+                            }
+                            
+                            // Get current position to ensure location works
+                            navigator.geolocation.getCurrentPosition(
+                                function(position) {
+                                    // Location permission granted, proceed with check-in
+                                    performCheckin();
+                                },
+                                function(error) {
+                                    alert('Location access is required for check-in. Please allow location access and try again.');
+                                },
+                                { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+                            );
+                        } catch (e) {
+                            alert('Location access is required for check-in. Please allow location access.');
+                        }
+                    } else {
+                        alert('Geolocation is not supported by this browser.');
+                    }
+                });
+            }
+            
+            // Check-out button handler
+            const checkoutBtn = document.getElementById('checkout-btn');
+            if (checkoutBtn) {
+                checkoutBtn.addEventListener('click', function() {
+                    performCheckout();
+                });
+            }
+            
+            function performCheckin() {
+                const formData = new FormData();
+                formData.append('action', 'checkin');
+                formData.append('ajax', '1');
+                
+                fetch('dashboard.php', {
+                    method: 'POST',
+                    body: formData
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        location.reload(); // Reload to show new status
+                    } else {
+                        alert('Check-in failed: ' + data.message);
+                    }
+                })
+                .catch(error => {
+                    console.error('Check-in error:', error);
+                    alert('Check-in failed. Please try again.');
+                });
+            }
+            
+            function performCheckout() {
+                const formData = new FormData();
+                formData.append('action', 'checkout');
+                formData.append('ajax', '1');
+                
+                fetch('dashboard.php', {
+                    method: 'POST',
+                    body: formData
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        location.reload(); // Reload to show new status
+                    } else {
+                        alert('Check-out failed: ' + data.message);
+                    }
+                })
+                .catch(error => {
+                    console.error('Check-out error:', error);
+                    alert('Check-out failed. Please try again.');
+                });
+            }
+            
             // Location tracking for checked-in users using FastAPI ONLY
             if (isCheckedIn) {
                 if ('geolocation' in navigator) {
                     // Get location immediately
                     getAndUpdateLocation();
                     
-                    // Then update at configured interval
+                    // Then update every minute as requested
                     setInterval(getAndUpdateLocation, updateInterval);
                 }
             }
@@ -551,12 +653,7 @@ try {
                             method: 'POST',
                             body: formData
                         })
-                        .then(response => {
-                            if (!response.ok) {
-                                throw new Error('Network response was not ok');
-                            }
-                            return response.json();
-                        })
+                        .then(response => response.json())
                         .then(data => {
                             console.log('Location updated via FastAPI:', data);
                         })
