@@ -1,3 +1,4 @@
+
 <?php
 require_once 'config.php';
 
@@ -399,7 +400,7 @@ $currentTab = isset($_GET['tab']) ? $_GET['tab'] : 'dashboard';
                     </div>
 
                 <?php elseif ($currentTab === 'tracking'): ?>
-                    <!-- Location Tracking Tab - ONLY MAP, NO TABLE -->
+                    <!-- Location Tracking Tab - ONLY MAP DISPLAY -->
                     <div class="data-table">
                         <div class="table-header">
                             <h2><i class="fas fa-map-marker-alt"></i> Live Location Map</h2>
