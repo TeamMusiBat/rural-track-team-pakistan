@@ -1,485 +1,381 @@
+
 <?php
-// Admin tracking page improvements
 require_once 'config.php';
 
-// Ensure user is admin
-if (!isLoggedIn() || !isAdmin()) {
-    header('Location: index.php');
-    exit;
+// Check if user is logged in and is admin
+if (!isLoggedIn()) {
+    redirect('index.php');
 }
 
-// Function to get improved tracking data - ONLY CHECKED IN USERS
-function getImprovedTrackingData() {
-    global $pdo;
-    
-    $loggedInUserRole = $_SESSION['role'];
-    $locations = [];
-    
-    try {
-        // Get FastAPI base URL from settings
-        $fastapi_base_url = getSettings('fastapi_base_url', 'http://54.250.198.0:8000');
-        
-        // Call FastAPI to get all locations
-        $api_url = $fastapi_base_url . "/fetch_all_locations";
-        $response = makeApiRequest($api_url, 'GET');
+if (!isAdmin()) {
+    redirect('dashboard.php');
+}
 
-        if ($response !== false && is_array($response)) {
-            foreach ($response as $location) {
-                if (isset($location['username'])) {
-                    // Get user details from database
-                    $stmt = $pdo->prepare("SELECT * FROM users WHERE username = ?");
-                    $stmt->execute([$location['username']]);
-                    $user = $stmt->fetch();
-                    
-                    if ($user) {
-                        // Check if user should be visible to current admin
-                        if ($loggedInUserRole === 'master' && ($user['role'] === 'developer' || $user['role'] === 'master')) {
-                            continue;
-                        }
-                        
-                        // Check if user is CURRENTLY checked in
-                        $stmt = $pdo->prepare("SELECT id, check_in FROM attendance WHERE user_id = ? AND check_out IS NULL ORDER BY id DESC LIMIT 1");
-                        $stmt->execute([$user['id']]);
-                        $checkin = $stmt->fetch();
-                        $isCheckedIn = !empty($checkin);
-                        
-                        // ONLY INCLUDE CHECKED IN USERS
-                        if ($isCheckedIn) {
-                            // Calculate work duration
-                            $workDuration = '';
-                            if ($checkin) {
-                                $checkinTime = new DateTime($checkin['check_in'], new DateTimeZone('Asia/Karachi'));
-                                $now = new DateTime('now', new DateTimeZone('Asia/Karachi'));
-                                $totalSeconds = $now->getTimestamp() - $checkinTime->getTimestamp();
-                                $hours = floor($totalSeconds / 3600);
-                                $minutes = floor(($totalSeconds % 3600) / 60);
-                                $workDuration = sprintf('%d:%02d', $hours, $minutes);
-                            }
-                            
-                            $locations[] = [
-                                'user_id' => $user['id'],
-                                'username' => $user['username'],
-                                'full_name' => $user['full_name'],
-                                'role' => $user['role'],
-                                'user_role' => $user['user_role'],
-                                'latitude' => $location['latitude'],
-                                'longitude' => $location['longitude'],
-                                'address' => $location['address'] ?? 'Unknown location',
-                                'is_checked_in' => true, // All users in this response are checked in
-                                'work_duration' => $workDuration,
-                                'timestamp' => getPakistaniTime('Y-m-d H:i:s'),
-                                'formatted_time' => getPakistaniTime('h:i A'),
-                                'google_maps_url' => "https://maps.google.com/?q={$location['latitude']},{$location['longitude']}"
-                            ];
-                        }
-                    }
-                }
-            }
+$user_id = $_SESSION['user_id'];
+$loggedInUserRole = $_SESSION['role'];
+
+// Get app name from settings
+$appName = getSettings('app_name', 'SmartORT');
+?>
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title><?php echo htmlspecialchars($appName); ?> - Live Tracking</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Inter', sans-serif;
         }
-    } catch (Exception $e) {
-        error_log("Tracking data fetch error: " . $e->getMessage());
-    }
-    
-    return $locations;
-}
-
-// If this is an AJAX request for tracking data
-if (isset($_GET['action']) && $_GET['action'] === 'get_tracking_data') {
-    header('Content-Type: application/json');
-    echo json_encode([
-        'success' => true,
-        'locations' => getImprovedTrackingData(),
-        'timestamp' => getPakistaniTime('Y-m-d H:i:s A')
-    ]);
-    exit;
-}
-
-// Generate improved tracking page HTML - MAP ONLY, NO DATA TABLE
-function generateTrackingPageHTML($locations) {
-    $html = '
-    <div class="tracking-container">
-        <style>
-            .tracking-container {
-                padding: 20px;
-                background: #f8f9fa;
-                min-height: 100vh;
-            }
-            
-            .tracking-header {
-                background: white;
-                padding: 20px;
-                border-radius: 8px;
-                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-                margin-bottom: 20px;
-            }
-            
-            .user-location-grid {
-                display: grid;
-                grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
-                gap: 20px;
-                margin-bottom: 30px;
-            }
-            
-            .user-location-card {
-                background: white;
-                border-radius: 8px;
-                padding: 20px;
-                box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-                border-left: 4px solid #007bff;
-                transition: transform 0.2s ease, box-shadow 0.2s ease;
-            }
-            
-            .user-location-card:hover {
-                transform: translateY(-2px);
-                box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-            }
-            
-            .user-info {
-                margin-bottom: 15px;
-            }
-            
-            .user-name {
-                font-size: 18px;
-                font-weight: 600;
-                color: #333;
-                margin-bottom: 5px;
-            }
-            
-            .user-username {
-                font-size: 14px;
-                color: #666;
-                margin-bottom: 10px;
-            }
-            
-            .status-badge {
-                display: inline-block;
-                padding: 4px 12px;
-                border-radius: 20px;
-                font-size: 12px;
-                font-weight: 500;
-                text-transform: uppercase;
-                background: #d4edda;
-                color: #155724;
-                border: 1px solid #c3e6cb;
-            }
-            
-            .location-details {
-                margin-top: 15px;
-                padding-top: 15px;
-                border-top: 1px solid #eee;
-            }
-            
-            .detail-row {
-                display: flex;
-                justify-content: space-between;
-                margin-bottom: 8px;
-                font-size: 14px;
-            }
-            
-            .detail-label {
-                font-weight: 500;
-                color: #555;
-            }
-            
-            .detail-value {
-                color: #333;
-                text-align: right;
-                flex: 1;
-                margin-left: 10px;
-            }
-            
-            .google-maps-btn {
-                display: inline-flex;
-                align-items: center;
-                gap: 8px;
-                background: #4285f4;
-                color: white !important;
-                padding: 12px 20px;
-                border-radius: 8px;
-                text-decoration: none !important;
-                font-size: 14px;
-                font-weight: 600;
-                margin-top: 15px;
-                transition: all 0.3s ease;
-                border: none;
-                cursor: pointer;
-                box-shadow: 0 2px 4px rgba(66, 133, 244, 0.2);
-                width: 100%;
-                justify-content: center;
-            }
-            
-            .google-maps-btn:hover {
-                background: #3367d6 !important;
-                color: white !important;
-                text-decoration: none !important;
-                transform: translateY(-1px);
-                box-shadow: 0 4px 8px rgba(66, 133, 244, 0.3);
-            }
-            
-            .google-maps-btn:focus {
-                outline: 2px solid #4285f4;
-                outline-offset: 2px;
-            }
-            
-            .google-maps-btn:visited {
-                color: white !important;
-            }
-            
-            .maps-icon {
-                width: 18px;
-                height: 18px;
-                fill: currentColor;
-            }
-            
-            .last-updated {
-                text-align: center;
-                color: #666;
-                font-size: 14px;
-                margin-top: 20px;
-                padding: 10px;
-                background: white;
-                border-radius: 6px;
-            }
-            
-            .no-locations {
-                text-align: center;
-                padding: 40px;
-                background: white;
-                border-radius: 8px;
-                color: #666;
-            }
-            
-            .refresh-indicator {
-                position: fixed;
-                top: 20px;
-                right: 20px;
-                background: #28a745;
-                color: white;
-                padding: 8px 16px;
-                border-radius: 20px;
-                font-size: 12px;
-                opacity: 0;
-                transition: opacity 0.3s ease;
-                z-index: 1000;
-            }
-            
-            .refresh-indicator.show {
-                opacity: 1;
-            }
-        </style>
         
-        <div class="tracking-header">
-            <h2 style="margin: 0; color: #333;">📍 Live User Tracking - Map View Only</h2>
-            <p style="margin: 10px 0 0 0; color: #666;">Real-time location updates • Auto-refresh every 59 seconds • Showing only checked-in users</p>
-        </div>
-        
-        <div class="refresh-indicator" id="refresh-indicator">
-            🔄 Refreshing locations...
-        </div>
-        
-        <div id="user-locations-list" class="user-location-grid">';
-    
-    if (empty($locations)) {
-        $html .= '
-            <div class="no-locations">
-                <h3>No Active Locations</h3>
-                <p>No users are currently checked in with location tracking enabled.</p>
-            </div>';
-    } else {
-        foreach ($locations as $location) {
-            $html .= '
-            <div class="user-location-card">
-                <div class="user-info">
-                    <div class="user-name">' . htmlspecialchars($location['full_name']) . '</div>
-                    <div class="user-username">@' . htmlspecialchars($location['username']) . '</div>
-                    <span class="status-badge">Checked In</span>
-                </div>
-                
-                <div class="location-details">
-                    <div class="detail-row">
-                        <span class="detail-label">Role:</span>
-                        <span class="detail-value">' . htmlspecialchars($location['user_role'] ?? $location['role']) . '</span>
-                    </div>';
-            
-            if (!empty($location['work_duration'])) {
-                $html .= '
-                    <div class="detail-row">
-                        <span class="detail-label">Work Duration:</span>
-                        <span class="detail-value">' . htmlspecialchars($location['work_duration']) . '</span>
-                    </div>';
-            }
-            
-            $html .= '
-                    <div class="detail-row">
-                        <span class="detail-label">Last Updated:</span>
-                        <span class="detail-value">' . htmlspecialchars($location['formatted_time']) . '</span>
-                    </div>
-                    
-                    <div class="detail-row">
-                        <span class="detail-label">Address:</span>
-                        <span class="detail-value">' . htmlspecialchars($location['address']) . '</span>
-                    </div>
-                </div>
-                
-                <a href="' . $location['google_maps_url'] . '" 
-                   target="_blank" 
-                   class="google-maps-btn">
-                    <svg class="maps-icon" viewBox="0 0 24 24" fill="currentColor">
-                        <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/>
-                    </svg>
-                    📍 Open in Google Maps
-                </a>
-            </div>';
+        body {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: #333;
         }
-    }
-    
-    $html .= '
-        </div>
         
-        <div class="last-updated" id="last-updated">
-            Last updated: ' . getPakistaniTime('h:i:s A') . '
-        </div>
+        .header {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            padding: 15px 20px;
+            box-shadow: 0 2px 20px rgba(0,0,0,0.1);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .header h1 {
+            font-size: 24px;
+            font-weight: 600;
+            color: #333;
+        }
+        
+        .back-btn {
+            background: #6366f1;
+            color: white;
+            padding: 8px 16px;
+            border-radius: 8px;
+            text-decoration: none;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+        
+        .back-btn:hover {
+            background: #4f46e5;
+            transform: translateY(-1px);
+        }
+        
+        .map-container {
+            position: relative;
+            height: calc(100vh - 80px);
+            margin: 0;
+            background: white;
+        }
+        
+        #map {
+            width: 100%;
+            height: 100%;
+        }
+        
+        .map-loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            z-index: 1000;
+        }
+        
+        .loading-spinner {
+            width: 40px;
+            height: 40px;
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #6366f1;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 15px;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .stats-overlay {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            padding: 15px;
+            border-radius: 12px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+            z-index: 1000;
+            min-width: 200px;
+        }
+        
+        .stat-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+            font-size: 14px;
+        }
+        
+        .stat-item:last-child {
+            margin-bottom: 0;
+        }
+        
+        .stat-label {
+            color: #666;
+        }
+        
+        .stat-value {
+            font-weight: 600;
+            color: #333;
+        }
+        
+        .refresh-btn {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            background: #6366f1;
+            color: white;
+            padding: 12px;
+            border-radius: 50%;
+            border: none;
+            cursor: pointer;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+            z-index: 1000;
+            transition: all 0.2s;
+        }
+        
+        .refresh-btn:hover {
+            background: #4f46e5;
+            transform: scale(1.05);
+        }
+        
+        .refresh-btn.spinning {
+            animation: spin 1s linear infinite;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1><i class="fas fa-map-marker-alt"></i> Live Employee Tracking</h1>
+        <a href="admin.php" class="back-btn">
+            <i class="fas fa-arrow-left"></i> Back to Admin
+        </a>
     </div>
     
-    <script>
-        // Include the admin auto-refresh functionality
-        document.addEventListener("DOMContentLoaded", function() {
-            // Start auto-refresh specific to tracking page
-            if (window.location.search.includes("tab=tracking")) {
-                console.log("Starting tracking page auto-refresh");
-                
-                // Refresh every 59 seconds
-                setInterval(function() {
-                    refreshTrackingData();
-                }, 59000);
-            }
-        });
+    <div class="map-container">
+        <div class="map-loading" id="map-loading">
+            <div class="loading-spinner"></div>
+            <p style="color: #666;">Loading map and locations...</p>
+        </div>
         
-        // Function to refresh tracking data
-        async function refreshTrackingData() {
-            const indicator = document.getElementById("refresh-indicator");
+        <div id="map"></div>
+        
+        <div class="stats-overlay">
+            <div class="stat-item">
+                <span class="stat-label">Total Users:</span>
+                <span class="stat-value" id="total-users">0</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">Checked In:</span>
+                <span class="stat-value" id="checked-in-users">0</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">Locations:</span>
+                <span class="stat-value" id="total-locations">0</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">Updated:</span>
+                <span class="stat-value" id="last-updated">--:--</span>
+            </div>
+        </div>
+        
+        <button class="refresh-btn" id="refresh-btn" onclick="refreshLocations()">
+            <i class="fas fa-sync-alt"></i>
+        </button>
+    </div>
+
+    <script>
+        let map;
+        let markers = [];
+        let isLoading = false;
+        
+        // Initialize map
+        function initMap() {
+            // Default center (Pakistan)
+            const defaultCenter = { lat: 30.3753, lng: 69.3451 };
             
-            try {
-                // Show refresh indicator
-                if (indicator) {
-                    indicator.classList.add("show");
-                }
-                
-                const response = await fetch("admin_tracking_fixes.php?action=get_tracking_data");
-                const data = await response.json();
-                
-                if (data.success) {
-                    updateTrackingDisplay(data.locations);
-                    
-                    // Update last updated time
-                    const lastUpdated = document.getElementById("last-updated");
-                    if (lastUpdated) {
-                        lastUpdated.textContent = `Last updated: ${data.timestamp}`;
+            map = new google.maps.Map(document.getElementById("map"), {
+                zoom: 6,
+                center: defaultCenter,
+                mapTypeId: google.maps.MapTypeId.ROADMAP,
+                styles: [
+                    {
+                        featureType: "poi",
+                        elementType: "labels",
+                        stylers: [{ visibility: "off" }]
                     }
-                }
-                
-            } catch (error) {
-                console.error("Error refreshing tracking data:", error);
-            } finally {
-                // Hide refresh indicator after 1 second
-                setTimeout(() => {
-                    if (indicator) {
-                        indicator.classList.remove("show");
-                    }
-                }, 1000);
-            }
+                ]
+            });
+            
+            // Load locations immediately
+            loadLocations();
+            
+            // Auto-refresh every 30 seconds
+            setInterval(loadLocations, 30000);
         }
         
-        // Function to update the tracking display
-        function updateTrackingDisplay(locations) {
-            const container = document.getElementById("user-locations-list");
-            if (!container) return;
+        function loadLocations() {
+            if (isLoading) return;
             
-            // Clear existing content
-            container.innerHTML = "";
+            isLoading = true;
+            const refreshBtn = document.getElementById('refresh-btn');
+            refreshBtn.classList.add('spinning');
+            
+            fetch('get_admin_data.php')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        updateStats(data.stats);
+                        updateMap(data.locations);
+                        hideLoading();
+                    } else {
+                        console.error('Failed to load data:', data.message);
+                    }
+                })
+                .catch(error => {
+                    console.error('Error loading locations:', error);
+                })
+                .finally(() => {
+                    isLoading = false;
+                    refreshBtn.classList.remove('spinning');
+                });
+        }
+        
+        function updateStats(stats) {
+            document.getElementById('total-users').textContent = stats.total_users;
+            document.getElementById('checked-in-users').textContent = stats.checked_in_users;
+            document.getElementById('total-locations').textContent = stats.total_locations;
+            document.getElementById('last-updated').textContent = stats.last_updated;
+        }
+        
+        function updateMap(locations) {
+            // Clear existing markers
+            markers.forEach(marker => marker.setMap(null));
+            markers = [];
             
             if (locations.length === 0) {
-                container.innerHTML = `
-                    <div class="no-locations">
-                        <h3>No Active Locations</h3>
-                        <p>No users are currently checked in with location tracking enabled.</p>
-                    </div>
-                `;
                 return;
             }
             
-            // Add updated location cards
+            const bounds = new google.maps.LatLngBounds();
+            
             locations.forEach(location => {
-                const card = createLocationCard(location);
-                container.appendChild(card);
+                const position = {
+                    lat: parseFloat(location.latitude),
+                    lng: parseFloat(location.longitude)
+                };
+                
+                // Create marker
+                const marker = new google.maps.Marker({
+                    position: position,
+                    map: map,
+                    title: location.full_name,
+                    icon: {
+                        url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(`
+                            <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24">
+                                <circle cx="12" cy="12" r="10" fill="#6366f1" stroke="white" stroke-width="2"/>
+                                <text x="12" y="16" text-anchor="middle" fill="white" font-size="10" font-family="Arial">
+                                    ${location.username.charAt(0).toUpperCase()}
+                                </text>
+                            </svg>
+                        `),
+                        scaledSize: new google.maps.Size(32, 32)
+                    }
+                });
+                
+                // Create info window
+                const infoWindow = new google.maps.InfoWindow({
+                    content: `
+                        <div style="max-width: 250px; font-family: Inter, sans-serif;">
+                            <h3 style="margin: 0 0 8px 0; color: #333; font-size: 16px;">
+                                <i class="fas fa-user" style="color: #6366f1;"></i> 
+                                ${location.full_name}
+                            </h3>
+                            <p style="margin: 4px 0; font-size: 13px; color: #666;">
+                                <strong>Position:</strong> ${location.user_role}
+                            </p>
+                            <p style="margin: 4px 0; font-size: 13px; color: #666;">
+                                <strong>Work Duration:</strong> ${location.work_duration}
+                            </p>
+                            <p style="margin: 4px 0; font-size: 13px; color: #666;">
+                                <strong>Location:</strong> ${location.address}
+                            </p>
+                            <p style="margin: 4px 0; font-size: 13px; color: #666;">
+                                <strong>Updated:</strong> ${location.formatted_time}
+                            </p>
+                        </div>
+                    `
+                });
+                
+                marker.addListener('click', () => {
+                    // Close all other info windows
+                    markers.forEach(m => {
+                        if (m.infoWindow) {
+                            m.infoWindow.close();
+                        }
+                    });
+                    
+                    infoWindow.open(map, marker);
+                });
+                
+                marker.infoWindow = infoWindow;
+                markers.push(marker);
+                bounds.extend(position);
             });
+            
+            // Fit map to show all markers
+            if (locations.length > 0) {
+                map.fitBounds(bounds);
+                if (locations.length === 1) {
+                    map.setZoom(15); // Zoom closer for single location
+                }
+            }
         }
         
-        // Function to create location card element
-        function createLocationCard(location) {
-            const card = document.createElement("div");
-            card.className = "user-location-card";
-            
-            const statusClass = location.is_checked_in ? "status-online" : "status-offline";
-            const statusText = location.is_checked_in ? "Checked In" : "Checked Out";
-            
-            card.innerHTML = `
-                <div class="user-info">
-                    <div class="user-name">${escapeHtml(location.full_name)}</div>
-                    <div class="user-username">@${escapeHtml(location.username)}</div>
-                    <span class="status-badge ${statusClass}">${statusText}</span>
-                </div>
-                
-                <div class="location-details">
-                    <div class="detail-row">
-                        <span class="detail-label">Role:</span>
-                        <span class="detail-value">${escapeHtml(location.user_role || location.role)}</span>
-                    </div>
-                    ${location.work_duration ? `
-                    <div class="detail-row">
-                        <span class="detail-label">Work Duration:</span>
-                        <span class="detail-value">${escapeHtml(location.work_duration)}</span>
-                    </div>` : ""}
-                    <div class="detail-row">
-                        <span class="detail-label">Last Updated:</span>
-                        <span class="detail-value">${escapeHtml(location.formatted_time)}</span>
-                    </div>
-                    <div class="detail-row">
-                        <span class="detail-label">Address:</span>
-                        <span class="detail-value">${escapeHtml(location.address)}</span>
-                    </div>
-                </div>
-                
-                <a href="${location.google_maps_url}" target="_blank" class="google-maps-btn">
-                    <svg class="maps-icon" viewBox="0 0 24 24" fill="currentColor">
-                        <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/>
-                    </svg>
-                    📍 Open in Google Maps
-                </a>
-            `;
-            
-            return card;
+        function refreshLocations() {
+            loadLocations();
         }
         
-        // Utility function to escape HTML
-        function escapeHtml(text) {
-            const map = {
-                "&": "&amp;",
-                "<": "&lt;",
-                ">": "&gt;",
-                "\"": "&quot;",
-                "\'": "&#039;"
-            };
-            return text.replace(/[&<>"\']/g, function(m) { return map[m]; });
+        function hideLoading() {
+            const loading = document.getElementById('map-loading');
+            if (loading) {
+                loading.style.display = 'none';
+            }
         }
-    </script>';
+        
+        // Error handling for Google Maps
+        window.gm_authFailure = function() {
+            document.getElementById('map').innerHTML = 
+                '<div style="display: flex; align-items: center; justify-content: center; height: 100%; background: #f8f9fa; color: #666; text-align: center;">' +
+                '<div><i class="fas fa-exclamation-triangle" style="font-size: 48px; color: #ffc107; margin-bottom: 15px;"></i>' +
+                '<h3>Google Maps API Error</h3><p>Please check your API key configuration.</p></div></div>';
+        };
+    </script>
     
-    return $html;
-}
-
-// If this is not an AJAX request, return the full HTML
-if (!isset($_GET['action'])) {
-    $locations = getImprovedTrackingData();
-    echo generateTrackingPageHTML($locations);
-}
-?>
+    <!-- Google Maps API -->
+    <script async defer src="https://maps.googleapis.com/maps/api/js?key=<?php echo getSettings('google_maps_api_key', ''); ?>&callback=initMap"></script>
+</body>
+</html>

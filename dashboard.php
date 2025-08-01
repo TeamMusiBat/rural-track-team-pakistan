@@ -70,55 +70,85 @@ try {
 
     // Handle check-in/check-out and location updates
     if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+        // Ensure we return JSON for AJAX requests
+        if (isset($_POST['ajax']) && $_POST['ajax'] == 1) {
+            header('Content-Type: application/json');
+            header('Cache-Control: no-cache, must-revalidate');
+        }
+        
         if (isset($_POST['action'])) {
             if ($_POST['action'] === 'checkin' && !$isCheckedIn && $needsToCheckIn) {
-                // Perform check-in with Pakistani time
-                $pakistani_time = getPakistaniTime();
-                $stmt = $pdo->prepare("INSERT INTO attendance (user_id, check_in) VALUES (?, ?)");
-                $stmt->execute([$user_id, $pakistani_time]);
-                
-                if (!isUserDeveloper($user_id)) {
-                    logActivity($user_id, 'check_in', 'User checked in');
+                try {
+                    // Perform check-in with Pakistani time
+                    $pakistani_time = getPakistaniTime();
+                    $stmt = $pdo->prepare("INSERT INTO attendance (user_id, check_in) VALUES (?, ?)");
+                    $result = $stmt->execute([$user_id, $pakistani_time]);
+                    
+                    if (!$result) {
+                        throw new Exception('Failed to insert attendance record');
+                    }
+                    
+                    if (!isUserDeveloper($user_id)) {
+                        logActivity($user_id, 'check_in', 'User checked in');
+                    }
+                    
+                    // Update user location status
+                    updateUserLocationStatus($user_id, true);
+                    
+                    // Return JSON for AJAX
+                    if (isset($_POST['ajax']) && $_POST['ajax'] == 1) {
+                        echo json_encode(['success' => true, 'message' => 'Checked in successfully']);
+                        exit;
+                    }
+                    
+                    redirect('dashboard.php');
+                } catch (Exception $e) {
+                    error_log("Check-in error: " . $e->getMessage());
+                    if (isset($_POST['ajax']) && $_POST['ajax'] == 1) {
+                        echo json_encode(['success' => false, 'message' => 'Check-in failed: ' . $e->getMessage()]);
+                        exit;
+                    }
+                    redirect('dashboard.php?error=checkin_failed');
                 }
-                
-                // Update user location status
-                updateUserLocationStatus($user_id, true);
-                
-                // Return JSON for AJAX
-                if (isset($_POST['ajax']) && $_POST['ajax'] == 1) {
-                    header('Content-Type: application/json');
-                    echo json_encode(['success' => true, 'message' => 'Checked in successfully']);
-                    exit;
-                }
-                
-                redirect('dashboard.php');
             } 
             else if ($_POST['action'] === 'checkout' && $isCheckedIn) {
-                // Calculate duration in minutes using Pakistani time
-                $checkinTime = new DateTime($lastCheckin['check_in'], new DateTimeZone('Asia/Karachi'));
-                $now = new DateTime('now', new DateTimeZone('Asia/Karachi'));
-                $duration_minutes = intval(($now->getTimestamp() - $checkinTime->getTimestamp()) / 60);
-                
-                // Perform check-out with Pakistani time
-                $pakistani_checkout = getPakistaniTime();
-                $stmt = $pdo->prepare("UPDATE attendance SET check_out = ?, duration_minutes = ? WHERE id = ?");
-                $stmt->execute([$pakistani_checkout, $duration_minutes, $lastCheckin['id']]);
-                
-                if (!isUserDeveloper($user_id)) {
-                    logActivity($user_id, 'check_out', "User checked out. Duration: $duration_minutes minutes");
+                try {
+                    // Calculate duration in minutes using Pakistani time
+                    $checkinTime = new DateTime($lastCheckin['check_in'], new DateTimeZone('Asia/Karachi'));
+                    $now = new DateTime('now', new DateTimeZone('Asia/Karachi'));
+                    $duration_minutes = intval(($now->getTimestamp() - $checkinTime->getTimestamp()) / 60);
+                    
+                    // Perform check-out with Pakistani time
+                    $pakistani_checkout = getPakistaniTime();
+                    $stmt = $pdo->prepare("UPDATE attendance SET check_out = ?, duration_minutes = ? WHERE id = ?");
+                    $result = $stmt->execute([$pakistani_checkout, $duration_minutes, $lastCheckin['id']]);
+                    
+                    if (!$result) {
+                        throw new Exception('Failed to update attendance record');
+                    }
+                    
+                    if (!isUserDeveloper($user_id)) {
+                        logActivity($user_id, 'check_out', "User checked out. Duration: $duration_minutes minutes");
+                    }
+                    
+                    // Update user location status
+                    updateUserLocationStatus($user_id, false);
+                    
+                    // Return JSON for AJAX
+                    if (isset($_POST['ajax']) && $_POST['ajax'] == 1) {
+                        echo json_encode(['success' => true, 'message' => 'Checked out successfully']);
+                        exit;
+                    }
+                    
+                    redirect('dashboard.php');
+                } catch (Exception $e) {
+                    error_log("Check-out error: " . $e->getMessage());
+                    if (isset($_POST['ajax']) && $_POST['ajax'] == 1) {
+                        echo json_encode(['success' => false, 'message' => 'Check-out failed: ' . $e->getMessage()]);
+                        exit;
+                    }
+                    redirect('dashboard.php?error=checkout_failed');
                 }
-                
-                // Update user location status
-                updateUserLocationStatus($user_id, false);
-                
-                // Return JSON for AJAX
-                if (isset($_POST['ajax']) && $_POST['ajax'] == 1) {
-                    header('Content-Type: application/json');
-                    echo json_encode(['success' => true, 'message' => 'Checked out successfully']);
-                    exit;
-                }
-                
-                redirect('dashboard.php');
             }
             else if ($_POST['action'] === 'update_location' && $isCheckedIn) {
                 // Update location using FastAPI ONLY
@@ -137,7 +167,6 @@ try {
                             updateUserLocationStatus($user_id, true);
                             
                             // Return success for AJAX calls
-                            header('Content-Type: application/json');
                             echo json_encode(['success' => true, 'message' => 'Location updated successfully']);
                             exit;
                         } else {
@@ -147,17 +176,21 @@ try {
                         // Log error and return proper JSON response
                         error_log("Location update error: " . $e->getMessage());
                         
-                        header('Content-Type: application/json');
                         echo json_encode(['success' => false, 'message' => 'Failed to update location: ' . $e->getMessage()]);
                         exit;
                     }
                 } else {
                     // Return error for AJAX calls
-                    header('Content-Type: application/json');
                     echo json_encode(['success' => false, 'message' => 'Invalid location data']);
                     exit;
                 }
             }
+        }
+        
+        // If we get here and it's an AJAX request, return error
+        if (isset($_POST['ajax']) && $_POST['ajax'] == 1) {
+            echo json_encode(['success' => false, 'message' => 'Invalid action or state']);
+            exit;
         }
     }
 
