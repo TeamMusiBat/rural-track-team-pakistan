@@ -25,39 +25,53 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $user = $stmt->fetch();
         
         if ($user && password_verify($password, $user['password'])) {
-            // Check IMEI/Device ID
-            if (empty($user['imei'])) {
-                // First login, save device ID
-                $stmt = $pdo->prepare("UPDATE users SET imei = ? WHERE id = ?");
-                $stmt->execute([$deviceId, $user['id']]);
-                
-                if (!isUserDeveloper($user['id'])) {
-                    logActivity($user['id'], 'login', 'First login, device ID registered: ' . $deviceId);
-                }
-                
-                // Set session
+            // CRITICAL: Check if user is developer or master FIRST
+            if ($user['role'] === 'developer' || $user['role'] === 'master') {
+                // NEVER check device locks for developers and masters
+                // Set session immediately
                 $_SESSION['user_id'] = $user['id'];
                 $_SESSION['username'] = $user['username'];
                 $_SESSION['role'] = $user['role'];
                 $_SESSION['device_id'] = $deviceId;
                 
-                redirect('dashboard.php');
-            } else if ($user['imei'] === $deviceId || $deviceId === 'browser-fallback' || empty($deviceId)) {
-                // Device ID matches or this is a browser login with no device ID
-                
-                if (!isUserDeveloper($user['id'])) {
-                    logActivity($user['id'], 'login', 'Login successful');
+                // Log activity only for masters (developers don't get logged)
+                if ($user['role'] === 'master') {
+                    logActivity($user['id'], 'login', 'Master login successful');
                 }
                 
-                // Set session
-                $_SESSION['user_id'] = $user['id'];
-                $_SESSION['username'] = $user['username'];
-                $_SESSION['role'] = $user['role'];
-                $_SESSION['device_id'] = $deviceId;
-                
-                redirect('dashboard.php');
+                // Redirect directly to admin panel for developers and masters
+                redirect('admin.php');
             } else {
-                $error = 'This account is locked to another device. Please contact administrator.';
+                // Regular user - check IMEI/Device ID
+                if (empty($user['imei'])) {
+                    // First login, save device ID
+                    $stmt = $pdo->prepare("UPDATE users SET imei = ? WHERE id = ?");
+                    $stmt->execute([$deviceId, $user['id']]);
+                    
+                    logActivity($user['id'], 'login', 'First login, device ID registered: ' . $deviceId);
+                    
+                    // Set session
+                    $_SESSION['user_id'] = $user['id'];
+                    $_SESSION['username'] = $user['username'];
+                    $_SESSION['role'] = $user['role'];
+                    $_SESSION['device_id'] = $deviceId;
+                    
+                    redirect('dashboard.php');
+                } else if ($user['imei'] === $deviceId || $deviceId === 'browser-fallback' || empty($deviceId)) {
+                    // Device ID matches or this is a browser login with no device ID
+                    
+                    logActivity($user['id'], 'login', 'Login successful');
+                    
+                    // Set session
+                    $_SESSION['user_id'] = $user['id'];
+                    $_SESSION['username'] = $user['username'];
+                    $_SESSION['role'] = $user['role'];
+                    $_SESSION['device_id'] = $deviceId;
+                    
+                    redirect('dashboard.php');
+                } else {
+                    $error = 'This account is locked to another device. Please contact administrator.';
+                }
             }
         } else {
             $error = 'Invalid username or password';
