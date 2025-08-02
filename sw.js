@@ -1,12 +1,9 @@
 const CACHE_NAME = 'smartort-v1.0.3';
 const urlsToCache = [
-    '/',
-    '/dashboard.php',
-    '/index.php',
-    '/admin.php',
-    '/style.css',
-    'https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap',
-    'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css'
+    './',
+    './dashboard.php',
+    './index.php',
+    './admin.php'
 ];
 
 // Install event
@@ -104,13 +101,6 @@ async function sendPendingLocationUpdates() {
         if (clientsArr.length > 0) {
             // Ask first client for pending updates
             clientsArr[0].postMessage({ type: 'GET_PENDING_UPDATES' });
-            // Listen for response (one-time)
-            self.addEventListener('message', function handler(event) {
-                if (event.data && event.data.type === 'PENDING_UPDATES') {
-                    pendingUpdates = event.data.updates || [];
-                    self.removeEventListener('message', handler);
-                }
-            });
         }
         // Fallback: try IndexedDB or empty
         if (!pendingUpdates || pendingUpdates.length === 0) {
