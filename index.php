@@ -524,9 +524,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
             
             // Request location permission for Android/iOS devices immediately
-            if (/android/i.test(navigator.userAgent) || /iPhone|iPad|iPod/i.test(navigator.userAgent)) {
-                requestLocationPermission();
-            }
+            //if (/android/i.test(navigator.userAgent) || /iPhone|iPad|iPod/i.test(navigator.userAgent)) {
+            //    requestLocationPermission();
+            //}
         });
     </script>
 </body>
