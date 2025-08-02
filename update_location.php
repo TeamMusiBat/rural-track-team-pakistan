@@ -39,6 +39,28 @@ if ($latitude == 0 || $longitude == 0) {
     exit;
 }
 
+// Rate limiting: Check last update time (1 minute = 60 seconds)
+$stmt = $pdo->prepare("SELECT last_location_update FROM users WHERE id = ?");
+$stmt->execute([$user_id]);
+$user = $stmt->fetch();
+
+if ($user && !empty($user['last_location_update'])) {
+    $lastUpdateTime = strtotime($user['last_location_update']);
+    $currentTime = time();
+    $timeDifference = $currentTime - $lastUpdateTime;
+    
+    if ($timeDifference < 60) { // Less than 60 seconds
+        $remainingTime = 60 - $timeDifference;
+        echo json_encode([
+            'success' => false, 
+            'message' => "Please wait {$remainingTime} seconds before next location update",
+            'rate_limited' => true,
+            'remaining_seconds' => $remainingTime
+        ]);
+        exit;
+    }
+}
+
 // Use FastAPI EXCLUSIVELY for location updates
 $address = 'Unknown location';
 $fastapi_success = false;
@@ -76,8 +98,9 @@ try {
             $address = $location_data['address'];
         }
         
-        // Update user location status in database (but NOT storing location history in database)
-        updateUserLocationStatus($user_id, true);
+        // Update user location status in database and last update time
+        $stmt = $pdo->prepare("UPDATE users SET is_location_enabled = 1, last_location_update = NOW() WHERE id = ?");
+        $stmt->execute([$user_id]);
         
         // Log activity with Pakistani time (only for non-developers)
         if (!isUserDeveloper($user_id)) {
@@ -94,7 +117,8 @@ try {
             'fastapi_status' => true,
             'timestamp' => getPakistaniTime('h:i:s A'),
             'color_theme' => $randomColor,
-            'data_source' => 'FastAPI Only - No Database Storage'
+            'data_source' => 'FastAPI Only - No Database Storage',
+            'next_update_allowed_in' => 60 // Next update allowed in 60 seconds
         ]);
     } else {
         throw new Exception('FastAPI request failed or returned invalid response');

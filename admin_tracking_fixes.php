@@ -186,6 +186,34 @@ $appName = getSettings('app_name', 'SmartORT');
         .fastapi-status.error {
             color: #e74c3c;
         }
+
+        /* Fixed Google Maps button styling */
+        .gm-style .gm-style-iw-c .gm-style-iw-d {
+            color: #333 !important;
+        }
+
+        .google-maps-link {
+            display: inline-flex;
+            align-items: center;
+            padding: 6px 12px;
+            background: #4285f4;
+            color: white !important;
+            text-decoration: none;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 500;
+            margin-top: 8px;
+            transition: background-color 0.2s;
+        }
+
+        .google-maps-link:hover {
+            background: #3367d6;
+            color: white !important;
+        }
+
+        .google-maps-link i {
+            margin-right: 4px;
+        }
     </style>
 </head>
 <body>
@@ -347,10 +375,10 @@ $appName = getSettings('app_name', 'SmartORT');
                     }
                 });
                 
-                // Create info window with FastAPI data
+                // Create info window with FastAPI data and fixed Google Maps link
                 const infoWindow = new google.maps.InfoWindow({
                     content: `
-                        <div style="max-width: 250px; font-family: Inter, sans-serif;">
+                        <div style="max-width: 250px; font-family: Inter, sans-serif; color: #333;">
                             <h3 style="margin: 0 0 8px 0; color: #333; font-size: 16px;">
                                 <i class="fas fa-user" style="color: #16a085;"></i> 
                                 ${location.full_name}
@@ -373,6 +401,11 @@ $appName = getSettings('app_name', 'SmartORT');
                             <p style="margin: 4px 0; font-size: 11px; color: #999;">
                                 Data from FastAPI: ${location.latitude.toFixed(6)}, ${location.longitude.toFixed(6)}
                             </p>
+                            <a href="https://maps.google.com/?q=${location.latitude},${location.longitude}" 
+                               target="_blank" 
+                               class="google-maps-link">
+                                <i class="fas fa-map-marker-alt"></i> View in Google Maps
+                            </a>
                         </div>
                     `
                 });
