@@ -5,7 +5,6 @@ let isLocationEnabled = false;
 let watchId = null;
 let pendingLocationUpdates = JSON.parse(localStorage.getItem('pendingLocationUpdates') || '[]');
 
-// Light color themes for visual feedback when location is updated
 const dashboardThemes = [
     { bg: '#E8F5E8', name: 'Light Green' },
     { bg: '#E3F2FD', name: 'Light Blue' },
@@ -17,11 +16,8 @@ const dashboardThemes = [
     { bg: '#F1F8E9', name: 'Light Lime' }
 ];
 
-// Initialize dashboard location manager
 function initializeDashboardLocationManager() {
-    // Check if user is checked in
     if (document.querySelector('#check-out-btn')) {
-        // User is checked in, start location tracking
         startLocationTracking();
         console.log('Dashboard location manager initialized - user is checked in');
     } else {
@@ -29,11 +25,8 @@ function initializeDashboardLocationManager() {
     }
 }
 
-// Start location tracking with 1-minute intervals
 function startLocationTracking() {
-    if (locationUpdateInterval) {
-        clearInterval(locationUpdateInterval);
-    }
+    if (locationUpdateInterval) clearInterval(locationUpdateInterval);
 
     if (navigator.geolocation) {
         getCurrentLocationAndUpdate();
@@ -58,7 +51,6 @@ function startLocationTracking() {
     }
 }
 
-// Get current location and update if 1 minute has passed
 function getCurrentLocationAndUpdate() {
     if (navigator.geolocation) {
         navigator.geolocation.getCurrentPosition(
@@ -73,7 +65,6 @@ function getCurrentLocationAndUpdate() {
     }
 }
 
-// Handle location update with 1-minute rate limiting
 function handleLocationUpdate(position) {
     const currentTime = Date.now();
     const timeSinceLastUpdate = currentTime - lastLocationUpdateTime;
@@ -87,17 +78,15 @@ function handleLocationUpdate(position) {
     const longitude = position.coords.longitude;
 
     updateLocationToFastAPI(latitude, longitude);
-
     lastLocationUpdateTime = currentTime;
     isLocationEnabled = true;
 
     console.log(`Location updated: ${latitude}, ${longitude} at ${new Date().toLocaleTimeString()}`);
 }
 
-// Handle location errors
 function handleLocationError(error) {
     let errorMessage = '';
-    switch(error.code) {
+    switch (error.code) {
         case error.PERMISSION_DENIED:
             errorMessage = "Location access denied by user";
             isLocationEnabled = false;
@@ -117,7 +106,6 @@ function handleLocationError(error) {
     showLocationError(errorMessage);
 }
 
-// Update location to FastAPI endpoint, with offline/background sync support
 async function updateLocationToFastAPI(latitude, longitude) {
     const formData = new FormData();
     formData.append('latitude', latitude);
@@ -151,14 +139,13 @@ async function updateLocationToFastAPI(latitude, longitude) {
             throw new Error(data.message);
         }
     } catch (error) {
-        // Save failed update for background sync
         pendingLocationUpdates.push({
             latitude, longitude, timestamp: new Date().toISOString()
         });
         localStorage.setItem('pendingLocationUpdates', JSON.stringify(pendingLocationUpdates));
 
         if ('serviceWorker' in navigator && 'SyncManager' in window) {
-            navigator.serviceWorker.ready.then(function(registration) {
+            navigator.serviceWorker.ready.then(registration => {
                 registration.sync.register('location-sync');
             });
         }
@@ -168,8 +155,7 @@ async function updateLocationToFastAPI(latitude, longitude) {
     }
 }
 
-// Handle background sync from Service Worker
-window.addEventListener('online', function() {
+window.addEventListener('online', () => {
     if (pendingLocationUpdates.length > 0) {
         pendingLocationUpdates.forEach(update => {
             updateLocationToFastAPI(update.latitude, update.longitude);
@@ -179,28 +165,18 @@ window.addEventListener('online', function() {
     }
 });
 
-// Apply dashboard color theme change
 function applyDashboardColorTheme(colorTheme) {
     const dashboard = document.body;
-    if (dashboard && colorTheme) {
-        dashboard.style.transition = 'background-color 0.8s ease';
-        dashboard.style.backgroundColor = colorTheme.bg;
-        setTimeout(() => {
-            dashboard.style.backgroundColor = '';
-        }, 3000);
-        console.log('Dashboard color theme applied for location update feedback');
-    } else {
-        const randomTheme = dashboardThemes[Math.floor(Math.random() * dashboardThemes.length)];
-        dashboard.style.transition = 'background-color 0.8s ease';
-        dashboard.style.backgroundColor = randomTheme.bg;
-        setTimeout(() => {
-            dashboard.style.backgroundColor = '';
-        }, 3000);
-        console.log(`Applied ${randomTheme.name} dashboard theme`);
-    }
+    const theme = colorTheme || dashboardThemes[Math.floor(Math.random() * dashboardThemes.length)];
+
+    dashboard.style.transition = 'background-color 0.8s ease';
+    dashboard.style.backgroundColor = theme.bg;
+
+    setTimeout(() => {
+        dashboard.style.backgroundColor = '';
+    }, 3000);
 }
 
-// Show location permission warning
 function showLocationPermissionWarning() {
     let warningElement = document.querySelector('#location-warning');
     if (!warningElement) {
@@ -223,6 +199,7 @@ function showLocationPermissionWarning() {
         `;
         document.body.appendChild(warningElement);
     }
+
     warningElement.innerHTML = `
         <div style="display: flex; align-items: center;">
             <i class="fas fa-exclamation-triangle" style="margin-right: 10px; font-size: 16px;"></i>
@@ -232,6 +209,7 @@ function showLocationPermissionWarning() {
             </div>
         </div>
     `;
+
     setTimeout(() => {
         if (!isLocationEnabled && warningElement) {
             warningElement.style.opacity = '0.7';
@@ -239,7 +217,6 @@ function showLocationPermissionWarning() {
     }, 10000);
 }
 
-// Show location error
 function showLocationError(message) {
     const errorElement = document.createElement('div');
     errorElement.style.cssText = `
@@ -262,13 +239,10 @@ function showLocationError(message) {
     `;
     document.body.appendChild(errorElement);
     setTimeout(() => {
-        if (errorElement.parentNode) {
-            errorElement.parentNode.removeChild(errorElement);
-        }
+        errorElement.remove();
     }, 5000);
 }
 
-// Stop location tracking
 function stopLocationTracking() {
     if (locationUpdateInterval) {
         clearInterval(locationUpdateInterval);
@@ -278,80 +252,107 @@ function stopLocationTracking() {
         navigator.geolocation.clearWatch(watchId);
         watchId = null;
     }
+
     const warningElement = document.querySelector('#location-warning');
-    if (warningElement) {
-        warningElement.remove();
-    }
+    if (warningElement) warningElement.remove();
+
     console.log('Location tracking stopped');
 }
 
-// Handle page visibility change for background updates
-document.addEventListener('visibilitychange', function() {
-    if (document.hidden) {
-        console.log('Page hidden - location tracking continues in background');
-    } else {
-        console.log('Page visible - resuming normal location tracking');
-        if (document.querySelector('#check-out-btn')) {
-            setTimeout(() => {
-                getCurrentLocationAndUpdate();
-            }, 1000);
-        }
+document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && document.querySelector('#check-out-btn')) {
+        setTimeout(() => {
+            getCurrentLocationAndUpdate();
+        }, 1000);
     }
 });
 
-// Initialize when DOM is ready
-document.addEventListener('DOMContentLoaded', function() {
+document.addEventListener('DOMContentLoaded', function () {
     setTimeout(() => {
         initializeDashboardLocationManager();
     }, 1000);
-});
 
-document.addEventListener('DOMContentLoaded', function() {
     const checkinBtn = document.getElementById('checkin-btn');
     if (checkinBtn) {
-        checkinBtn.addEventListener('click', function() {
-            // Disable button to prevent double-clicks
+        checkinBtn.addEventListener('click', function () {
+            if (checkinBtn.disabled) return;
             checkinBtn.disabled = true;
-
-            // Optional: visually indicate loading
             checkinBtn.textContent = 'Checking in...';
 
-            // Prepare AJAX request for check-in
+            if ('geolocation' in navigator) {
+                navigator.geolocation.getCurrentPosition(function (position) {
+                    const formData = new FormData();
+                    formData.append('action', 'checkin');
+                    formData.append('ajax', '1');
+                    formData.append('latitude', position.coords.latitude);
+                    formData.append('longitude', position.coords.longitude);
+
+                    fetch('dashboard.php', {
+                        method: 'POST',
+                        body: formData
+                    })
+                        .then(response => response.json())
+                        .then(data => {
+                            if (data.success) {
+                                window.location.reload();
+                            } else {
+                                alert('Check-in failed: ' + (data.message || 'Unknown error'));
+                                checkinBtn.disabled = false;
+                                checkinBtn.textContent = 'Check In';
+                            }
+                        })
+                        .catch(() => {
+                            alert('Network error. Please try again.');
+                            checkinBtn.disabled = false;
+                            checkinBtn.textContent = 'Check In';
+                        });
+                }, function () {
+                    alert('Location permission is required for check-in.');
+                    checkinBtn.disabled = false;
+                    checkinBtn.textContent = 'Check In';
+                });
+            } else {
+                alert('Geolocation not supported.');
+                checkinBtn.disabled = false;
+                checkinBtn.textContent = 'Check In';
+            }
+        });
+    }
+
+    const checkoutBtn = document.getElementById('checkout-btn');
+    if (checkoutBtn) {
+        checkoutBtn.addEventListener('click', function () {
+            if (checkoutBtn.disabled) return;
+            checkoutBtn.disabled = true;
+            checkoutBtn.textContent = 'Checking out...';
+
             const formData = new FormData();
-            formData.append('action', 'checkin');
+            formData.append('action', 'checkout');
             formData.append('ajax', '1');
 
             fetch('dashboard.php', {
                 method: 'POST',
                 body: formData
             })
-            .then(response => response.json())
-            .then(data => {
-                if (data.success) {
-                    // Reload page to show new checked-in status
-                    window.location.reload();
-                } else {
-                    // Show error and re-enable button
-                    alert('Check-in failed: ' + (data.message || 'Unknown error'));
-                    checkinBtn.disabled = false;
-                    checkinBtn.textContent = 'Check In';
-                }
-            })
-            .catch(error => {
-                alert('Check-in failed due to network error. Please try again.');
-                checkinBtn.disabled = false;
-                checkinBtn.textContent = 'Check In';
-            });
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        window.location.reload();
+                    } else {
+                        alert('Check-out failed: ' + (data.message || 'Unknown error'));
+                        checkoutBtn.disabled = false;
+                        checkoutBtn.textContent = 'Check Out';
+                    }
+                })
+                .catch(() => {
+                    alert('Network error. Please try again.');
+                    checkoutBtn.disabled = false;
+                    checkoutBtn.textContent = 'Check Out';
+                });
         });
     }
 });
 
-// Handle page unload
-window.addEventListener('beforeunload', function() {
-    console.log('Page unloading - location tracking will continue in background if possible');
-});
-
-// Export functions for global use
 window.startLocationTracking = startLocationTracking;
 window.stopLocationTracking = stopLocationTracking;
 window.getCurrentLocationAndUpdate = getCurrentLocationAndUpdate;
