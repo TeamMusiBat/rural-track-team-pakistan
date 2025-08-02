@@ -151,14 +151,16 @@ try {
                 }
             }
             else if ($_POST['action'] === 'update_location' && $isCheckedIn) {
-                // Update location using FastAPI endpoints
+                // Update location using FastAPI endpoints with your Ubuntu VPS
                 $latitude = floatval($_POST['latitude'] ?? 0);
                 $longitude = floatval($_POST['longitude'] ?? 0);
                 
                 if ($latitude != 0 && $longitude != 0) {
                     try {
+                        // Get FastAPI base URL from settings or use your Ubuntu server
+                        $fastapi_base_url = getSettings('fastapi_base_url', 'http://54.250.198.0:8000');
+                        
                         // Call FastAPI to update location using your specific endpoint format
-                        $fastapi_base_url = 'http://54.250.198.0:8000';
                         $api_url = $fastapi_base_url . "/update_location/{$user['username']}/{$longitude}_{$latitude}";
                         
                         // Make POST request to FastAPI
@@ -211,9 +213,9 @@ try {
                 }
             }
             else if ($_POST['action'] === 'fetch_location' && $isCheckedIn) {
-                // Fetch current user location from FastAPI
+                // Fetch current user location from FastAPI with your Ubuntu VPS
                 try {
-                    $fastapi_base_url = 'http://54.250.198.0:8000';
+                    $fastapi_base_url = getSettings('fastapi_base_url', 'http://54.250.198.0:8000');
                     $api_url = $fastapi_base_url . "/fetch_location/{$user['username']}";
                     
                     // Make POST request to FastAPI (as per your specification)
