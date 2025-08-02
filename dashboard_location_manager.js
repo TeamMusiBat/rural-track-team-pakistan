@@ -306,6 +306,46 @@ document.addEventListener('DOMContentLoaded', function() {
     }, 1000);
 });
 
+document.addEventListener('DOMContentLoaded', function() {
+    const checkinBtn = document.getElementById('checkin-btn');
+    if (checkinBtn) {
+        checkinBtn.addEventListener('click', function() {
+            // Disable button to prevent double-clicks
+            checkinBtn.disabled = true;
+
+            // Optional: visually indicate loading
+            checkinBtn.textContent = 'Checking in...';
+
+            // Prepare AJAX request for check-in
+            const formData = new FormData();
+            formData.append('action', 'checkin');
+            formData.append('ajax', '1');
+
+            fetch('dashboard.php', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    // Reload page to show new checked-in status
+                    window.location.reload();
+                } else {
+                    // Show error and re-enable button
+                    alert('Check-in failed: ' + (data.message || 'Unknown error'));
+                    checkinBtn.disabled = false;
+                    checkinBtn.textContent = 'Check In';
+                }
+            })
+            .catch(error => {
+                alert('Check-in failed due to network error. Please try again.');
+                checkinBtn.disabled = false;
+                checkinBtn.textContent = 'Check In';
+            });
+        });
+    }
+});
+
 // Handle page unload
 window.addEventListener('beforeunload', function() {
     console.log('Page unloading - location tracking will continue in background if possible');
