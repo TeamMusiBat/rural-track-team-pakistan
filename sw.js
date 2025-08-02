@@ -1,4 +1,3 @@
-
 const CACHE_NAME = 'smartort-v1.0.3';
 const urlsToCache = [
     '/',
@@ -20,12 +19,11 @@ self.addEventListener('install', function(event) {
                 return cache.addAll(urlsToCache);
             })
     );
-    self.skipWaiting(); // Force activation
+    self.skipWaiting();
 });
 
-// Fetch event with proper redirect handling
+// Fetch event
 self.addEventListener('fetch', function(event) {
-    // Skip service worker for API calls and dynamic content
     if (event.request.url.includes('update_location.php') ||
         event.request.url.includes('get_locations.php') ||
         event.request.url.includes('get_address.php') ||
@@ -33,37 +31,27 @@ self.addEventListener('fetch', function(event) {
         event.request.method !== 'GET') {
         return fetch(event.request);
     }
-
     event.respondWith(
         caches.match(event.request)
             .then(function(response) {
-                // Return cached version if available
                 if (response) {
                     return response;
                 }
-
-                // Make network request with proper redirect handling
                 return fetch(event.request, {
                     redirect: 'follow',
                     credentials: 'same-origin'
                 }).then(function(response) {
-                    // Don't cache non-successful responses
                     if (!response || response.status !== 200 || response.type !== 'basic') {
                         return response;
                     }
-
-                    // Clone the response
                     const responseToCache = response.clone();
-
                     caches.open(CACHE_NAME)
                         .then(function(cache) {
                             cache.put(event.request, responseToCache);
                         });
-
                     return response;
                 }).catch(function(error) {
                     console.log('Fetch failed:', error);
-                    // Return cached fallback if available
                     return caches.match('/index.php') || new Response('Offline');
                 });
             })
@@ -88,7 +76,7 @@ self.addEventListener('activate', function(event) {
     return self.clients.claim();
 });
 
-// Message event - handle this properly
+// Message event
 self.addEventListener('message', function(event) {
     if (event.data && event.data.type === 'SKIP_WAITING') {
         self.skipWaiting();
@@ -96,3 +84,53 @@ self.addEventListener('message', function(event) {
 });
 
 console.log('Service Worker script loaded');
+
+// Background Sync for location updates
+self.addEventListener('sync', function(event) {
+    if (event.tag === 'location-sync') {
+        event.waitUntil(sendPendingLocationUpdates());
+    }
+});
+
+// Send pending location updates to server
+async function sendPendingLocationUpdates() {
+    try {
+        const clientsArr = await self.clients.matchAll({ includeUncontrolled: true });
+        for (const client of clientsArr) {
+            client.postMessage({ type: 'SYNC_START' });
+        }
+        // Try to get updates from localStorage via client message
+        let pendingUpdates = [];
+        if (clientsArr.length > 0) {
+            // Ask first client for pending updates
+            clientsArr[0].postMessage({ type: 'GET_PENDING_UPDATES' });
+            // Listen for response (one-time)
+            self.addEventListener('message', function handler(event) {
+                if (event.data && event.data.type === 'PENDING_UPDATES') {
+                    pendingUpdates = event.data.updates || [];
+                    self.removeEventListener('message', handler);
+                }
+            });
+        }
+        // Fallback: try IndexedDB or empty
+        if (!pendingUpdates || pendingUpdates.length === 0) {
+            pendingUpdates = []; // If you use IndexedDB, read from there
+        }
+        for (const update of pendingUpdates) {
+            try {
+                await fetch('/update_location.php', {
+                    method: 'POST',
+                    body: JSON.stringify(update),
+                    headers: { 'Content-Type': 'application/json' }
+                });
+            } catch (e) {
+                // Leave for next sync
+            }
+        }
+        for (const client of clientsArr) {
+            client.postMessage({ type: 'SYNC_DONE' });
+        }
+    } catch (err) {
+        console.error('Background sync failed:', err);
+    }
+}
