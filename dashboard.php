@@ -261,9 +261,33 @@ try {
             }
         }
         
-        // If we get here and it's an AJAX request, return error
+        // If we get here and it's an AJAX request, return error with more details
         if (isset($_POST['ajax']) && $_POST['ajax'] == 1) {
-            echo json_encode(['success' => false, 'message' => 'Invalid action or state']);
+            $action = $_POST['action'] ?? 'none';
+            $debugInfo = [
+                'action' => $action,
+                'isCheckedIn' => $isCheckedIn,
+                'needsToCheckIn' => $needsToCheckIn,
+                'user_role' => $user['role'] ?? 'unknown'
+            ];
+            
+            if ($action === 'checkin') {
+                if ($isCheckedIn) {
+                    echo json_encode(['success' => false, 'message' => 'User is already checked in', 'debug' => $debugInfo]);
+                } elseif (!$needsToCheckIn) {
+                    echo json_encode(['success' => false, 'message' => 'User does not need to check in (role: ' . ($user['role'] ?? 'unknown') . ')', 'debug' => $debugInfo]);
+                } else {
+                    echo json_encode(['success' => false, 'message' => 'Unknown check-in error', 'debug' => $debugInfo]);
+                }
+            } elseif ($action === 'checkout') {
+                if (!$isCheckedIn) {
+                    echo json_encode(['success' => false, 'message' => 'User is not checked in', 'debug' => $debugInfo]);
+                } else {
+                    echo json_encode(['success' => false, 'message' => 'Unknown check-out error', 'debug' => $debugInfo]);
+                }
+            } else {
+                echo json_encode(['success' => false, 'message' => 'Invalid action: ' . $action, 'debug' => $debugInfo]);
+            }
             exit;
         }
     }
