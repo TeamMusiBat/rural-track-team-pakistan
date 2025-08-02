@@ -22,7 +22,7 @@ $loggedInUserRole = $_SESSION['role'];
 $locations = [];
 
 try {
-    // Get FastAPI base URL from settings - now using your Ubuntu VPS
+    // Get FastAPI base URL from settings
     $fastapi_base_url = getSettings('fastapi_base_url', 'http://54.250.198.0:8000');
     
     // Call FastAPI to get all locations using GET method

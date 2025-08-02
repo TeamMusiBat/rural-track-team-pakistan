@@ -39,7 +39,7 @@ if ($latitude == 0 || $longitude == 0) {
     exit;
 }
 
-// Use FastAPI ONLY for location updates
+// Use FastAPI EXCLUSIVELY for location updates
 $address = 'Unknown location';
 $fastapi_success = false;
 
@@ -61,7 +61,7 @@ try {
     // Get FastAPI base URL from settings
     $fastapi_base_url = getSettings('fastapi_base_url', 'http://54.250.198.0:8000');
     
-    // Call FastAPI to update location
+    // Call FastAPI to update location - ONLY using FastAPI
     $api_url = $fastapi_base_url . "/update_location/{$username}/{$longitude}_{$latitude}";
     $response = makeApiRequest($api_url, 'POST');
 
@@ -76,24 +76,25 @@ try {
             $address = $location_data['address'];
         }
         
-        // Update user location status in database
+        // Update user location status in database (but NOT storing location history in database)
         updateUserLocationStatus($user_id, true);
         
         // Log activity with Pakistani time (only for non-developers)
         if (!isUserDeveloper($user_id)) {
-            logActivity($user_id, 'location_update', "Location updated via FastAPI: $address");
+            logActivity($user_id, 'location_update', "Location updated via FastAPI: $address (Lat: $latitude, Lng: $longitude)");
         }
         
         // Return success response with color theme
         echo json_encode([
             'success' => true, 
-            'message' => 'Location updated successfully',
+            'message' => 'Location updated successfully via FastAPI',
             'address' => $address,
             'latitude' => $latitude,
             'longitude' => $longitude,
             'fastapi_status' => true,
             'timestamp' => getPakistaniTime('h:i:s A'),
-            'color_theme' => $randomColor
+            'color_theme' => $randomColor,
+            'data_source' => 'FastAPI Only - No Database Storage'
         ]);
     } else {
         throw new Exception('FastAPI request failed or returned invalid response');
@@ -105,7 +106,9 @@ try {
     // Return error response
     echo json_encode([
         'success' => false, 
-        'message' => 'Failed to update location via FastAPI: ' . $e->getMessage()
+        'message' => 'Failed to update location via FastAPI: ' . $e->getMessage(),
+        'fastapi_status' => false,
+        'data_source' => 'FastAPI Only - Update Failed'
     ]);
 }
 

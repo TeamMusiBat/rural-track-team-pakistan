@@ -165,11 +165,32 @@ $appName = getSettings('app_name', 'SmartORT');
         .refresh-btn.spinning {
             animation: spin 1s linear infinite;
         }
+        
+        .fastapi-status {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 12px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            z-index: 1000;
+        }
+        
+        .fastapi-status.connected {
+            color: #16a085;
+        }
+        
+        .fastapi-status.error {
+            color: #e74c3c;
+        }
     </style>
 </head>
 <body>
     <div class="header">
-        <h1><i class="fas fa-map-marker-alt"></i> Live Employee Tracking</h1>
+        <h1><i class="fas fa-map-marker-alt"></i> Live Employee Tracking (FastAPI)</h1>
         <a href="admin.php" class="back-btn">
             <i class="fas fa-arrow-left"></i> Back to Admin
         </a>
@@ -178,7 +199,7 @@ $appName = getSettings('app_name', 'SmartORT');
     <div class="map-container">
         <div class="map-loading" id="map-loading">
             <div class="loading-spinner"></div>
-            <p style="color: #666;">Loading map and locations...</p>
+            <p style="color: #666;">Loading FastAPI locations...</p>
         </div>
         
         <div id="map"></div>
@@ -193,7 +214,7 @@ $appName = getSettings('app_name', 'SmartORT');
                 <span class="stat-value" id="checked-in-users">0</span>
             </div>
             <div class="stat-item">
-                <span class="stat-label">Locations:</span>
+                <span class="stat-label">Active Locations:</span>
                 <span class="stat-value" id="total-locations">0</span>
             </div>
             <div class="stat-item">
@@ -205,6 +226,10 @@ $appName = getSettings('app_name', 'SmartORT');
         <button class="refresh-btn" id="refresh-btn" onclick="refreshLocations()">
             <i class="fas fa-sync-alt"></i>
         </button>
+        
+        <div class="fastapi-status" id="fastapi-status">
+            Connecting to FastAPI...
+        </div>
     </div>
 
     <script>
@@ -230,11 +255,13 @@ $appName = getSettings('app_name', 'SmartORT');
                 ]
             });
             
-            // Load locations immediately
+            // Load locations immediately from FastAPI
             loadLocations();
             
-            // Auto-refresh every 30 seconds
-            setInterval(loadLocations, 30000);
+            // Auto-refresh every 59 seconds to match admin panel
+            setInterval(loadLocations, 59000);
+            
+            console.log('Map initialized with FastAPI integration');
         }
         
         function loadLocations() {
@@ -242,7 +269,11 @@ $appName = getSettings('app_name', 'SmartORT');
             
             isLoading = true;
             const refreshBtn = document.getElementById('refresh-btn');
+            const statusElement = document.getElementById('fastapi-status');
+            
             refreshBtn.classList.add('spinning');
+            statusElement.textContent = 'Fetching from FastAPI...';
+            statusElement.className = 'fastapi-status';
             
             fetch('get_admin_data.php')
                 .then(response => response.json())
@@ -251,12 +282,21 @@ $appName = getSettings('app_name', 'SmartORT');
                         updateStats(data.stats);
                         updateMap(data.locations);
                         hideLoading();
+                        
+                        statusElement.textContent = `FastAPI: ${data.locations.length} checked-in users loaded`;
+                        statusElement.className = 'fastapi-status connected';
+                        
+                        console.log(`FastAPI data loaded: ${data.locations.length} checked-in users`);
                     } else {
-                        console.error('Failed to load data:', data.message);
+                        console.error('Failed to load FastAPI data:', data.message);
+                        statusElement.textContent = 'FastAPI Error: ' + data.message;
+                        statusElement.className = 'fastapi-status error';
                     }
                 })
                 .catch(error => {
-                    console.error('Error loading locations:', error);
+                    console.error('Error loading FastAPI locations:', error);
+                    statusElement.textContent = 'FastAPI Connection Failed';
+                    statusElement.className = 'fastapi-status error';
                 })
                 .finally(() => {
                     isLoading = false;
@@ -277,6 +317,7 @@ $appName = getSettings('app_name', 'SmartORT');
             markers = [];
             
             if (locations.length === 0) {
+                console.log('No checked-in users with location data available');
                 return;
             }
             
@@ -288,7 +329,7 @@ $appName = getSettings('app_name', 'SmartORT');
                     lng: parseFloat(location.longitude)
                 };
                 
-                // Create marker
+                // Create marker with user initial
                 const marker = new google.maps.Marker({
                     position: position,
                     map: map,
@@ -296,7 +337,7 @@ $appName = getSettings('app_name', 'SmartORT');
                     icon: {
                         url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(`
                             <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24">
-                                <circle cx="12" cy="12" r="10" fill="#6366f1" stroke="white" stroke-width="2"/>
+                                <circle cx="12" cy="12" r="10" fill="#16a085" stroke="white" stroke-width="2"/>
                                 <text x="12" y="16" text-anchor="middle" fill="white" font-size="10" font-family="Arial">
                                     ${location.username.charAt(0).toUpperCase()}
                                 </text>
@@ -306,16 +347,19 @@ $appName = getSettings('app_name', 'SmartORT');
                     }
                 });
                 
-                // Create info window
+                // Create info window with FastAPI data
                 const infoWindow = new google.maps.InfoWindow({
                     content: `
                         <div style="max-width: 250px; font-family: Inter, sans-serif;">
                             <h3 style="margin: 0 0 8px 0; color: #333; font-size: 16px;">
-                                <i class="fas fa-user" style="color: #6366f1;"></i> 
+                                <i class="fas fa-user" style="color: #16a085;"></i> 
                                 ${location.full_name}
                             </h3>
                             <p style="margin: 4px 0; font-size: 13px; color: #666;">
-                                <strong>Position:</strong> ${location.user_role}
+                                <strong>Username:</strong> @${location.username}
+                            </p>
+                            <p style="margin: 4px 0; font-size: 13px; color: #666;">
+                                <strong>Role:</strong> ${location.user_role}
                             </p>
                             <p style="margin: 4px 0; font-size: 13px; color: #666;">
                                 <strong>Work Duration:</strong> ${location.work_duration}
@@ -324,7 +368,10 @@ $appName = getSettings('app_name', 'SmartORT');
                                 <strong>Location:</strong> ${location.address}
                             </p>
                             <p style="margin: 4px 0; font-size: 13px; color: #666;">
-                                <strong>Updated:</strong> ${location.formatted_time}
+                                <strong>Last Update:</strong> ${location.formatted_time}
+                            </p>
+                            <p style="margin: 4px 0; font-size: 11px; color: #999;">
+                                Data from FastAPI: ${location.latitude.toFixed(6)}, ${location.longitude.toFixed(6)}
                             </p>
                         </div>
                     `
@@ -353,6 +400,8 @@ $appName = getSettings('app_name', 'SmartORT');
                     map.setZoom(15); // Zoom closer for single location
                 }
             }
+            
+            console.log(`Map updated with ${locations.length} checked-in user markers from FastAPI`);
         }
         
         function refreshLocations() {
@@ -373,9 +422,17 @@ $appName = getSettings('app_name', 'SmartORT');
                 '<div><i class="fas fa-exclamation-triangle" style="font-size: 48px; color: #ffc107; margin-bottom: 15px;"></i>' +
                 '<h3>Google Maps API Error</h3><p>Please check your API key configuration.</p></div></div>';
         };
+        
+        // Global function for admin auto-refresh integration
+        window.updateMapMarkers = function(locations) {
+            updateMap(locations);
+        };
     </script>
     
     <!-- Google Maps API -->
     <script async defer src="https://maps.googleapis.com/maps/api/js?key=<?php echo getSettings('google_maps_api_key', ''); ?>&callback=initMap"></script>
+    
+    <!-- Include admin auto-refresh for 59-second updates -->
+    <script src="admin_auto_refresh.js"></script>
 </body>
 </html>
