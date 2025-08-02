@@ -51,9 +51,9 @@ try {
 
     $needsToCheckIn = userNeedsToCheckIn($user['role']);
 
-    // Check if the user is checked in
+    // Check if the user is checked in - REFRESH this data every time
     $lastCheckin = getLastCheckin($user_id);
-    $isCheckedIn = !empty($lastCheckin);
+    $isCheckedIn = !empty($lastCheckin); // getLastCheckin already filters for check_out IS NULL
 
     // Calculate real-time duration using Pakistani time
     $checkinDuration = '';
@@ -95,9 +95,14 @@ try {
                     // Update user location status
                     updateUserLocationStatus($user_id, true);
                     
-                    // Return JSON for AJAX
+                    // Return JSON for AJAX with explicit success
                     if (isset($_POST['ajax']) && $_POST['ajax'] == 1) {
-                        echo json_encode(['success' => true, 'message' => 'Checked in successfully']);
+                        echo json_encode([
+                            'success' => true, 
+                            'message' => 'Checked in successfully',
+                            'reload' => true,
+                            'new_status' => 'checked_in'
+                        ]);
                         exit;
                     }
                     
@@ -111,7 +116,18 @@ try {
                     redirect('dashboard.php?error=checkin_failed');
                 }
             } 
-            else if ($_POST['action'] === 'checkout' && $isCheckedIn) {
+            else if ($_POST['action'] === 'checkout') {
+                // Re-check if user is actually checked in before checkout
+                $lastCheckin = getLastCheckin($user_id);
+                $isCheckedIn = !empty($lastCheckin);
+                
+                if (!$isCheckedIn) {
+                    if (isset($_POST['ajax']) && $_POST['ajax'] == 1) {
+                        echo json_encode(['success' => false, 'message' => 'User is not checked in or already checked out', 'debug' => ['lastCheckin' => $lastCheckin, 'user_id' => $user_id]]);
+                        exit;
+                    }
+                    redirect('dashboard.php?error=not_checked_in');
+                }
                 try {
                     // Calculate duration in minutes using Pakistani time
                     $checkinTime = new DateTime($lastCheckin['check_in'], new DateTimeZone('Asia/Karachi'));
@@ -134,9 +150,14 @@ try {
                     // Update user location status
                     updateUserLocationStatus($user_id, false);
                     
-                    // Return JSON for AJAX
+                    // Return JSON for AJAX with explicit success
                     if (isset($_POST['ajax']) && $_POST['ajax'] == 1) {
-                        echo json_encode(['success' => true, 'message' => 'Checked out successfully']);
+                        echo json_encode([
+                            'success' => true, 
+                            'message' => 'Checked out successfully',
+                            'reload' => true,
+                            'new_status' => 'checked_out'
+                        ]);
                         exit;
                     }
                     
@@ -268,7 +289,9 @@ try {
                 'action' => $action,
                 'isCheckedIn' => $isCheckedIn,
                 'needsToCheckIn' => $needsToCheckIn,
-                'user_role' => $user['role'] ?? 'unknown'
+                'user_role' => $user['role'] ?? 'unknown',
+                'lastCheckin' => $lastCheckin ? 'exists' : 'none',
+                'checkout_status' => $lastCheckin && !empty($lastCheckin['check_out']) ? 'checked_out' : 'still_active'
             ];
             
             if ($action === 'checkin') {
@@ -640,12 +663,15 @@ try {
         <?php echo htmlspecialchars($appName); ?> &copy; <?php echo date('Y'); ?>
     </div>
 
+    <script src="dashboard_location_manager.js"></script>
     <script>
         document.addEventListener('DOMContentLoaded', function() {
             const isCheckedIn = <?php echo $isCheckedIn ? 'true' : 'false'; ?>;
             const username = '<?php echo $user['username']; ?>';
             const checkinTime = <?php echo $isCheckedIn && $lastCheckin ? '"' . $lastCheckin['check_in'] . '"' : 'null'; ?>;
             const updateInterval = <?php echo $locationUpdateInterval; ?>; // Every 1 minute
+            
+            console.log('Dashboard loaded - User checked in:', isCheckedIn);
             
             // Update Pakistani time clock
             function updateClock() {
@@ -678,117 +704,6 @@ try {
             setInterval(updateWorkDuration, 1000);
             updateClock();
             updateWorkDuration();
-            
-            // Check-in button handler
-            const checkinBtn = document.getElementById('checkin-btn');
-            if (checkinBtn) {
-                checkinBtn.addEventListener('click', async function() {
-                    // Request location permission first
-                    if ('geolocation' in navigator) {
-                        try {
-                            const permission = await navigator.permissions.query({name: 'geolocation'});
-                            if (permission.state === 'denied') {
-                                alert('Location permission is required for check-in. Please enable location access.');
-                                return;
-                            }
-                            
-                            // Get current position to ensure location works
-                            navigator.geolocation.getCurrentPosition(
-                                function(position) {
-                                    // Location permission granted, proceed with check-in
-                                    performCheckin();
-                                },
-                                function(error) {
-                                    alert('Location access is required for check-in. Please allow location access and try again.');
-                                },
-                                { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
-                            );
-                        } catch (e) {
-                            alert('Location access is required for check-in. Please allow location access.');
-                        }
-                    } else {
-                        alert('Geolocation is not supported by this browser.');
-                    }
-                });
-            }
-            
-            // Check-out button handler
-            const checkoutBtn = document.getElementById('checkout-btn');
-            if (checkoutBtn) {
-                checkoutBtn.addEventListener('click', function() {
-                    performCheckout();
-                });
-            }
-            
-            function performCheckin() {
-                const formData = new FormData();
-                formData.append('action', 'checkin');
-                formData.append('ajax', '1');
-                
-                fetch('dashboard.php', {
-                    method: 'POST',
-                    body: formData
-                })
-                .then(response => {
-                    if (!response.ok) {
-                        throw new Error('Network response was not ok');
-                    }
-                    return response.text().then(text => {
-                        try {
-                            return JSON.parse(text);
-                        } catch (e) {
-                            console.error('Invalid JSON response:', text);
-                            throw new Error('Invalid server response');
-                        }
-                    });
-                })
-                .then(data => {
-                    if (data.success) {
-                        location.reload(); // Reload to show new status
-                    } else {
-                        alert('Check-in failed: ' + data.message);
-                    }
-                })
-                .catch(error => {
-                    console.error('Check-in error:', error);
-                    alert('Check-in failed. Please try again.');
-                });
-            }
-            
-            function performCheckout() {
-                const formData = new FormData();
-                formData.append('action', 'checkout');
-                formData.append('ajax', '1');
-                
-                fetch('dashboard.php', {
-                    method: 'POST',
-                    body: formData
-                })
-                .then(response => {
-                    if (!response.ok) {
-                        throw new Error('Network response was not ok');
-                    }
-                    return response.text().then(text => {
-                        try {
-                            return JSON.parse(text);
-                        } catch (e) {
-                            console.error('Invalid JSON response:', text);
-                            throw new Error('Invalid server response');
-                        }
-                    });
-                })
-                .then(data => {
-                    if (data.success) {
-                        location.reload(); // Reload to show new status
-                    } else {
-                        alert('Check-out failed: ' + data.message);
-                    }
-                })
-                .catch(error => {
-                    console.error('Check-out error:', error);
-                    alert('Check-out failed. Please try again.');
-                });
-            }
             
             // Enhanced background location tracking for checked-in users
             if (isCheckedIn) {
