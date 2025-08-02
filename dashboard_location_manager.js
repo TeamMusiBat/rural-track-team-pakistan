@@ -48,21 +48,27 @@ document.addEventListener("DOMContentLoaded", function () {
         }
 
         const xhr = new XMLHttpRequest();
-        xhr.open("POST", "save_location.php", true);
+        xhr.open("POST", "dashboard.php", true);
         xhr.setRequestHeader("Content-Type", "application/x-www-form-urlencoded");
 
         xhr.onreadystatechange = function () {
             if (xhr.readyState === XMLHttpRequest.DONE) {
                 try {
                     const response = JSON.parse(xhr.responseText);
-                    alert(response.message);
+                    if (response.success) {
+                        alert(response.message);
+                        // Reload page to show updated status
+                        location.reload();
+                    } else {
+                        alert("Failed: " + response.message);
+                    }
                 } catch (err) {
                     alert("Failed to parse server response.");
                 }
             }
         };
 
-        const params = `latitude=${userLatitude}&longitude=${userLongitude}&action=${action}`;
+        const params = `latitude=${userLatitude}&longitude=${userLongitude}&action=${action}&ajax=1`;
         xhr.send(params);
     }
 });
