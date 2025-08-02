@@ -151,26 +151,51 @@ try {
                 }
             }
             else if ($_POST['action'] === 'update_location' && $isCheckedIn) {
-                // Update location using FastAPI ONLY
+                // Update location using FastAPI endpoints
                 $latitude = floatval($_POST['latitude'] ?? 0);
                 $longitude = floatval($_POST['longitude'] ?? 0);
                 
                 if ($latitude != 0 && $longitude != 0) {
                     try {
-                        // Call FastAPI to update location
-                        $fastapi_base_url = getSettings('fastapi_base_url', 'http://54.250.198.0:8000');
+                        // Call FastAPI to update location using your specific endpoint format
+                        $fastapi_base_url = 'http://54.250.198.0:8000';
                         $api_url = $fastapi_base_url . "/update_location/{$user['username']}/{$longitude}_{$latitude}";
-                        $response = makeApiRequest($api_url, 'POST');
                         
-                        if ($response !== false) {
-                            // Update user location status
-                            updateUserLocationStatus($user_id, true);
+                        // Make POST request to FastAPI
+                        $ch = curl_init();
+                        curl_setopt($ch, CURLOPT_URL, $api_url);
+                        curl_setopt($ch, CURLOPT_POST, true);
+                        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+                        curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+                        curl_setopt($ch, CURLOPT_HTTPHEADER, [
+                            'Content-Type: application/json',
+                            'Accept: application/json'
+                        ]);
+                        
+                        $response = curl_exec($ch);
+                        $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                        $curl_error = curl_error($ch);
+                        curl_close($ch);
+                        
+                        if ($curl_error) {
+                            throw new Exception('cURL Error: ' . $curl_error);
+                        }
+                        
+                        if ($http_code >= 200 && $http_code < 300) {
+                            $response_data = json_decode($response, true);
                             
-                            // Return success for AJAX calls
-                            echo json_encode(['success' => true, 'message' => 'Location updated successfully']);
-                            exit;
+                            if ($response_data && isset($response_data['message'])) {
+                                // Update user location status
+                                updateUserLocationStatus($user_id, true);
+                                
+                                // Return success for AJAX calls
+                                echo json_encode(['success' => true, 'message' => 'Location updated successfully']);
+                                exit;
+                            } else {
+                                throw new Exception('Invalid response from FastAPI');
+                            }
                         } else {
-                            throw new Exception('FastAPI request failed');
+                            throw new Exception('FastAPI returned HTTP code: ' . $http_code);
                         }
                     } catch (Exception $e) {
                         // Log error and return proper JSON response
@@ -182,6 +207,53 @@ try {
                 } else {
                     // Return error for AJAX calls
                     echo json_encode(['success' => false, 'message' => 'Invalid location data']);
+                    exit;
+                }
+            }
+            else if ($_POST['action'] === 'fetch_location' && $isCheckedIn) {
+                // Fetch current user location from FastAPI
+                try {
+                    $fastapi_base_url = 'http://54.250.198.0:8000';
+                    $api_url = $fastapi_base_url . "/fetch_location/{$user['username']}";
+                    
+                    // Make POST request to FastAPI (as per your specification)
+                    $ch = curl_init();
+                    curl_setopt($ch, CURLOPT_URL, $api_url);
+                    curl_setopt($ch, CURLOPT_POST, true);
+                    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+                    curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+                    curl_setopt($ch, CURLOPT_HTTPHEADER, [
+                        'Content-Type: application/json',
+                        'Accept: application/json'
+                    ]);
+                    
+                    $response = curl_exec($ch);
+                    $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                    $curl_error = curl_error($ch);
+                    curl_close($ch);
+                    
+                    if ($curl_error) {
+                        throw new Exception('cURL Error: ' . $curl_error);
+                    }
+                    
+                    if ($http_code >= 200 && $http_code < 300) {
+                        $location_data = json_decode($response, true);
+                        
+                        if ($location_data && isset($location_data['username'])) {
+                            echo json_encode(['success' => true, 'data' => $location_data]);
+                            exit;
+                        } else {
+                            throw new Exception('Invalid response from FastAPI');
+                        }
+                    } else if ($http_code == 404) {
+                        echo json_encode(['success' => false, 'message' => 'User location not found']);
+                        exit;
+                    } else {
+                        throw new Exception('FastAPI returned HTTP code: ' . $http_code);
+                    }
+                } catch (Exception $e) {
+                    error_log("Fetch location error: " . $e->getMessage());
+                    echo json_encode(['success' => false, 'message' => 'Failed to fetch location: ' . $e->getMessage()]);
                     exit;
                 }
             }
@@ -631,7 +703,19 @@ try {
                     method: 'POST',
                     body: formData
                 })
-                .then(response => response.json())
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('Network response was not ok');
+                    }
+                    return response.text().then(text => {
+                        try {
+                            return JSON.parse(text);
+                        } catch (e) {
+                            console.error('Invalid JSON response:', text);
+                            throw new Error('Invalid server response');
+                        }
+                    });
+                })
                 .then(data => {
                     if (data.success) {
                         location.reload(); // Reload to show new status
@@ -654,7 +738,19 @@ try {
                     method: 'POST',
                     body: formData
                 })
-                .then(response => response.json())
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('Network response was not ok');
+                    }
+                    return response.text().then(text => {
+                        try {
+                            return JSON.parse(text);
+                        } catch (e) {
+                            console.error('Invalid JSON response:', text);
+                            throw new Error('Invalid server response');
+                        }
+                    });
+                })
                 .then(data => {
                     if (data.success) {
                         location.reload(); // Reload to show new status
@@ -775,7 +871,19 @@ try {
                             method: 'POST',
                             body: formData
                         })
-                        .then(response => response.json())
+                        .then(response => {
+                            if (!response.ok) {
+                                throw new Error('Network response was not ok');
+                            }
+                            return response.text().then(text => {
+                                try {
+                                    return JSON.parse(text);
+                                } catch (e) {
+                                    console.error('Invalid JSON response:', text);
+                                    throw new Error('Invalid server response');
+                                }
+                            });
+                        })
                         .then(data => {
                             console.log('Background location updated:', data);
                             
@@ -829,7 +937,19 @@ try {
                     method: 'POST',
                     body: formData
                 })
-                .then(response => response.json())
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('Network response was not ok');
+                    }
+                    return response.text().then(text => {
+                        try {
+                            return JSON.parse(text);
+                        } catch (e) {
+                            console.error('Invalid JSON response:', text);
+                            throw new Error('Invalid server response');
+                        }
+                    });
+                })
                 .then(data => {
                     console.log('Cached location updated:', data);
                 })
