@@ -40,7 +40,7 @@ if ($latitude == 0 || $longitude == 0) {
 }
 
 // Enhanced rate limiting: Check last update time (1 minute = 60 seconds)
-$stmt = $pdo->prepare("SELECT last_location_update, is_location_enabled FROM users WHERE id = ?");
+$stmt = $pdo->prepare("SELECT last_location_update FROM users WHERE id = ?");
 $stmt->execute([$user_id]);
 $user = $stmt->fetch();
 
@@ -62,99 +62,104 @@ if ($user && !empty($user['last_location_update'])) {
     }
 }
 
-// Additional check: Prevent duplicate requests with same coordinates within short time
-$recentLocationStmt = $pdo->prepare("
-    SELECT id FROM activity_logs 
-    WHERE user_id = ? 
-    AND activity_type = 'location_update' 
-    AND description LIKE CONCAT('%Lat: ', ?, '%') 
-    AND description LIKE CONCAT('%Lng: ', ?, '%')
-    AND timestamp > DATE_SUB(NOW(), INTERVAL 30 SECOND)
-    LIMIT 1
-");
-$recentLocationStmt->execute([$user_id, $latitude, $longitude]);
-if ($recentLocationStmt->fetch()) {
-    echo json_encode([
-        'success' => false, 
-        'message' => 'Duplicate location update prevented',
-        'rate_limited' => true,
-        'remaining_seconds' => 30
-    ]);
-    exit;
-}
-
-// Use FastAPI EXCLUSIVELY for location updates
-$address = 'Unknown location';
-$fastapi_success = false;
-
 // Generate random light theme colors for screen feedback
 $lightColors = [
-    ['bg' => '#E8F5E8', 'border' => '#4CAF50'], // Light green
-    ['bg' => '#E3F2FD', 'border' => '#2196F3'], // Light blue
-    ['bg' => '#FFF3E0', 'border' => '#FF9800'], // Light orange
-    ['bg' => '#F3E5F5', 'border' => '#9C27B0'], // Light purple
-    ['bg' => '#E0F2F1', 'border' => '#009688'], // Light teal
-    ['bg' => '#FFF8E1', 'border' => '#FFC107'], // Light amber
-    ['bg' => '#FCE4EC', 'border' => '#E91E63'], // Light pink
-    ['bg' => '#E8F5E8', 'border' => '#8BC34A']  // Light lime
+    ['bg' => '#E8F5E8', 'border' => '#4CAF50', 'name' => 'Green'], 
+    ['bg' => '#E3F2FD', 'border' => '#2196F3', 'name' => 'Blue'],
+    ['bg' => '#FFF3E0', 'border' => '#FF9800', 'name' => 'Orange'],
+    ['bg' => '#F3E5F5', 'border' => '#9C27B0', 'name' => 'Purple'],
+    ['bg' => '#E0F2F1', 'border' => '#009688', 'name' => 'Teal'],
+    ['bg' => '#FFF8E1', 'border' => '#FFC107', 'name' => 'Amber'],
+    ['bg' => '#FCE4EC', 'border' => '#E91E63', 'name' => 'Pink'],
+    ['bg' => '#E8F5E8', 'border' => '#8BC34A', 'name' => 'Lime']
 ];
 
 $randomColor = $lightColors[array_rand($lightColors)];
 
+// Use FastAPI EXCLUSIVELY for location updates
 try {
     // Get FastAPI base URL from settings
     $fastapi_base_url = getSettings('fastapi_base_url', 'http://54.250.198.0:8000');
     
-    // Call FastAPI to update location - ONLY using FastAPI
+    // Call FastAPI to update location - using POST method as specified
     $api_url = $fastapi_base_url . "/update_location/{$username}/{$longitude}_{$latitude}";
-    $response = makeApiRequest($api_url, 'POST');
-
-    if ($response !== false && isset($response['message'])) {
-        $fastapi_success = true;
+    
+    $context = stream_context_create([
+        'http' => [
+            'method' => 'POST',
+            'header' => "Content-Type: application/json\r\n",
+            'timeout' => 10
+        ]
+    ]);
+    
+    $response = @file_get_contents($api_url, false, $context);
+    
+    if ($response !== false) {
+        $result = json_decode($response, true);
         
-        // Try to get the address from FastAPI
-        $fetch_url = $fastapi_base_url . "/fetch_location/{$username}";
-        $location_data = makeApiRequest($fetch_url, 'GET');
-        
-        if ($location_data && isset($location_data['address'])) {
-            $address = $location_data['address'];
+        if ($result && isset($result['message']) && strpos($result['message'], 'Location added') !== false) {
+            // Success - update last update time in database
+            $stmt = $pdo->prepare("UPDATE users SET last_location_update = NOW() WHERE id = ?");
+            $stmt->execute([$user_id]);
+            
+            // Try to get the address from FastAPI
+            $address = 'Unknown location';
+            try {
+                $fetch_url = $fastapi_base_url . "/fetch_location/{$username}";
+                $fetch_context = stream_context_create([
+                    'http' => [
+                        'method' => 'POST',
+                        'header' => "Content-Type: application/json\r\n",
+                        'timeout' => 5
+                    ]
+                ]);
+                
+                $location_response = @file_get_contents($fetch_url, false, $fetch_context);
+                if ($location_response) {
+                    $location_data = json_decode($location_response, true);
+                    if ($location_data && isset($location_data['address'])) {
+                        $address = $location_data['address'];
+                    }
+                }
+            } catch (Exception $e) {
+                error_log("Error fetching address from FastAPI: " . $e->getMessage());
+            }
+            
+            // Log activity (only for non-developers)
+            if (!isUserDeveloper($user_id)) {
+                logActivity($user_id, 'location_update', "Location updated via FastAPI: $address (Lat: $latitude, Lng: $longitude)");
+            }
+            
+            // Return success response with color theme
+            echo json_encode([
+                'success' => true, 
+                'message' => 'Location updated successfully via FastAPI',
+                'address' => $address,
+                'latitude' => $latitude,
+                'longitude' => $longitude,
+                'fastapi_status' => true,
+                'timestamp' => getPakistaniTime('h:i:s A'),
+                'color_theme' => $randomColor,
+                'data_source' => 'FastAPI Only',
+                'next_update_allowed_in' => 60 // Next update allowed in 60 seconds
+            ]);
+        } else {
+            throw new Exception('FastAPI returned unexpected response: ' . json_encode($result));
         }
-        
-        // Update user location status in database and last update time
-        $stmt = $pdo->prepare("UPDATE users SET is_location_enabled = 1, last_location_update = NOW() WHERE id = ?");
-        $stmt->execute([$user_id]);
-        
-        // Log activity with Pakistani time (only for non-developers)
-        if (!isUserDeveloper($user_id)) {
-            logActivity($user_id, 'location_update', "Location updated via FastAPI: $address (Lat: $latitude, Lng: $longitude)");
-        }
-        
-        // Return success response with color theme
-        echo json_encode([
-            'success' => true, 
-            'message' => 'Location updated successfully via FastAPI',
-            'address' => $address,
-            'latitude' => $latitude,
-            'longitude' => $longitude,
-            'fastapi_status' => true,
-            'timestamp' => getPakistaniTime('h:i:s A'),
-            'color_theme' => $randomColor,
-            'data_source' => 'FastAPI Only - No Database Storage',
-            'next_update_allowed_in' => 60 // Next update allowed in 60 seconds
-        ]);
     } else {
-        throw new Exception('FastAPI request failed or returned invalid response');
+        throw new Exception('Failed to connect to FastAPI endpoint');
     }
 } catch (Exception $e) {
     // Log the error
-    error_log("FastAPI location update error: " . $e->getMessage());
+    error_log("FastAPI location update error for user {$username}: " . $e->getMessage());
     
     // Return error response
     echo json_encode([
         'success' => false, 
         'message' => 'Failed to update location via FastAPI: ' . $e->getMessage(),
         'fastapi_status' => false,
-        'data_source' => 'FastAPI Only - Update Failed'
+        'data_source' => 'FastAPI Only - Update Failed',
+        'api_url' => $api_url ?? 'Unknown'
     ]);
 }
 

@@ -69,8 +69,8 @@ try {
                             'full_name' => $user['full_name'],
                             'role' => $user['role'],
                             'user_role' => $user['user_role'],
-                            'latitude' => $location['latitude'],
-                            'longitude' => $location['longitude'],
+                            'latitude' => (float)$location['latitude'],
+                            'longitude' => (float)$location['longitude'],
                             'address' => $location['address'] ?? 'Unknown location',
                             'is_location_enabled' => 1,
                             'is_checked_in' => true, // All users in this list are checked in
@@ -82,6 +82,8 @@ try {
                 }
             }
         }
+    } else {
+        error_log("FastAPI fetch_all_locations returned invalid response: " . json_encode($response));
     }
 } catch (Exception $e) {
     error_log("Admin data fetch error: " . $e->getMessage());
@@ -105,10 +107,11 @@ echo json_encode([
     'success' => true,
     'locations' => $locations,
     'stats' => [
-        'total_users' => $totalUsers,
+        'total_users' => (int)$totalUsers,
         'checked_in_users' => $checkedInUsers,
         'total_locations' => $totalLocations,
         'last_updated' => getPakistaniTime('h:i:s A'),
-        'current_time' => getPakistaniTime('Y-m-d h:i:s A')
+        'current_time' => getPakistaniTime('Y-m-d h:i:s A'),
+        'fastapi_endpoint' => $fastapi_base_url . "/fetch_all_locations"
     ]
 ]);
