@@ -1,3 +1,4 @@
+
 /**
  * Background Location Worker
  * Handles location updates even when page is minimized or in background
@@ -12,6 +13,7 @@ class BackgroundLocationWorker {
         this.isUpdateInProgress = false;
         this.currentUser = null;
         this.isCheckedIn = false;
+        this.lastVisibilityLog = 0;
         
         // Light theme colors for feedback
         this.lightThemes = [
@@ -143,10 +145,15 @@ class BackgroundLocationWorker {
     // Setup page visibility listeners
     setupVisibilityListeners() {
         document.addEventListener('visibilitychange', () => {
-            if (document.hidden) {
-                console.log('Page hidden - background tracking continues');
-            } else {
-                console.log('Page visible - resuming normal operation');
+            const now = Date.now();
+            // Only log visibility changes every 30 seconds to reduce spam
+            if (now - this.lastVisibilityLog > 30000) {
+                if (document.hidden) {
+                    console.log('Page hidden - background tracking continues');
+                } else {
+                    console.log('Page visible - resuming normal operation');
+                }
+                this.lastVisibilityLog = now;
             }
         });
         
@@ -177,7 +184,7 @@ class BackgroundLocationWorker {
                           checkinBtn && 
                           checkinBtn.style.display === 'none';
         
-        // Start/stop tracking based on check-in status
+        // Start/stop tracking based on check-in status - only log changes
         if (this.isCheckedIn && !wasCheckedIn) {
             console.log('User checked in - starting background tracking');
             this.startTracking();
@@ -195,7 +202,6 @@ class BackgroundLocationWorker {
         
         if (timeSinceLastUpdate < minInterval) {
             const remainingTime = Math.ceil((minInterval - timeSinceLastUpdate) / 1000);
-            console.log(`Rate limited: ${remainingTime} seconds remaining`);
             return { allowed: false, remainingTime };
         }
         
@@ -205,7 +211,6 @@ class BackgroundLocationWorker {
     // Start background tracking
     startTracking() {
         if (this.isActive) {
-            console.log('Background tracking already active');
             return;
         }
         
@@ -249,7 +254,6 @@ class BackgroundLocationWorker {
     // Update location in background
     updateLocation() {
         if (!this.isActive || !this.isCheckedIn) {
-            console.log('Tracking not active or user not checked in');
             return;
         }
         
@@ -262,13 +266,11 @@ class BackgroundLocationWorker {
         // Check rate limiting
         const rateCheck = this.canUpdateLocation();
         if (!rateCheck.allowed) {
-            console.log(`Rate limited: ${rateCheck.remainingTime} seconds remaining`);
             return;
         }
         
         // Prevent multiple simultaneous requests
         if (this.isUpdateInProgress) {
-            console.log('Location update already in progress');
             return;
         }
         
@@ -295,36 +297,42 @@ class BackgroundLocationWorker {
         const xhr = new XMLHttpRequest();
         xhr.open('POST', 'update_location.php', true);
         xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
+        xhr.setRequestHeader('Cache-Control', 'no-cache');
+        xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
         
         xhr.onreadystatechange = () => {
             if (xhr.readyState === XMLHttpRequest.DONE) {
                 this.isUpdateInProgress = false;
                 
-                try {
-                    const response = JSON.parse(xhr.responseText);
-                    
-                    if (response.success) {
-                        this.lastUpdateTime = Date.now();
-                        console.log(`Background location updated successfully at ${new Date().toLocaleTimeString()}`);
+                if (xhr.status === 200) {
+                    try {
+                        const response = JSON.parse(xhr.responseText);
                         
-                        // Apply visual feedback
-                        this.applyColorTheme();
-                        
-                        // Update UI if elements exist
-                        this.updateLocationDisplay(response);
-                        
-                        // Hide any location warnings
-                        this.hideLocationWarning();
-                        
-                    } else {
-                        console.log('Background location update failed:', response.message);
-                        
-                        if (response.rate_limited) {
-                            console.log(`Rate limited: ${response.remaining_seconds} seconds`);
+                        if (response.success) {
+                            this.lastUpdateTime = Date.now();
+                            console.log(`Background location updated successfully at ${new Date().toLocaleTimeString()}`);
+                            
+                            // Apply visual feedback
+                            this.applyColorTheme();
+                            
+                            // Update UI if elements exist
+                            this.updateLocationDisplay(response);
+                            
+                            // Hide any location warnings
+                            this.hideLocationWarning();
+                            
+                        } else {
+                            if (response.rate_limited) {
+                                // Don't log rate limit messages to reduce spam
+                            } else {
+                                console.log('Background location update failed:', response.message);
+                            }
                         }
+                    } catch (err) {
+                        console.error('Background location update JSON parse error:', err);
                     }
-                } catch (err) {
-                    console.error('Background location update JSON parse error:', err);
+                } else {
+                    console.error('Background location update HTTP error:', xhr.status);
                 }
             }
         };
@@ -342,13 +350,13 @@ class BackgroundLocationWorker {
                 this.stopTracking();
                 break;
             case error.POSITION_UNAVAILABLE:
-                console.log('Location information unavailable');
+                // Don't spam console with these errors
                 break;
             case error.TIMEOUT:
-                console.log('Location request timed out');
+                // Don't spam console with timeout errors
                 break;
             default:
-                console.log('Unknown location error:', error.message);
+                console.log('Location error:', error.message);
                 break;
         }
     }
@@ -414,7 +422,7 @@ class BackgroundLocationWorker {
             isActive: this.isActive,
             isCheckedIn: this.isCheckedIn,
             locationPermission: this.locationPermissionStatus,
-            lastUpdate: new Date(this.lastUpdateTime).toLocaleTimeString(),
+            lastUpdate: this.lastUpdateTime ? new Date(this.lastUpdateTime).toLocaleTimeString() : 'Never',
             canUpdate: this.canUpdateLocation().allowed
         };
     }

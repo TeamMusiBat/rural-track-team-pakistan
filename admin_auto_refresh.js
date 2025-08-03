@@ -45,8 +45,8 @@ function stopAdminAutoRefresh() {
     }
 }
 
-// Refresh admin data from FastAPI endpoints with enhanced error handling
-async function refreshAdminData() {
+// Refresh admin data using AJAX to bypass service worker
+function refreshAdminData() {
     if (isRefreshing) {
         console.log('Admin refresh already in progress, skipping');
         return;
@@ -55,69 +55,88 @@ async function refreshAdminData() {
     isRefreshing = true;
     const startTime = Date.now();
     
-    try {
-        // Add cache busting to prevent stale data
-        const cacheBuster = `?t=${Date.now()}`;
-        const response = await fetch(`get_admin_data.php${cacheBuster}`, {
-            method: 'GET',
-            headers: { 
-                'Content-Type': 'application/json',
-                'Cache-Control': 'no-cache'
+    // Use XMLHttpRequest for better control over service worker bypassing
+    const xhr = new XMLHttpRequest();
+    const cacheBuster = `?t=${Date.now()}`;
+    
+    xhr.open('GET', `get_admin_data.php${cacheBuster}`, true);
+    xhr.setRequestHeader('Content-Type', 'application/json');
+    xhr.setRequestHeader('Cache-Control', 'no-cache');
+    xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
+    
+    xhr.onreadystatechange = function() {
+        if (xhr.readyState === XMLHttpRequest.DONE) {
+            isRefreshing = false;
+            
+            if (xhr.status === 200) {
+                try {
+                    const data = JSON.parse(xhr.responseText);
+                    
+                    if (data.success) {
+                        updateAdminStats(data.stats);
+                        updateUserLocations(data.locations);
+                        
+                        // Only update tracking map if on tracking tab
+                        if (window.location.search.includes('tab=tracking')) {
+                            updateTrackingMap(data.locations);
+                        }
+                        
+                        // Update status indicator
+                        const lastUpdatedElement = document.querySelector('.last-updated');
+                        if (lastUpdatedElement) {
+                            const updateTime = new Date().toLocaleTimeString();
+                            const refreshDuration = Date.now() - startTime;
+                            lastUpdatedElement.textContent = `Last updated: ${updateTime} (${refreshDuration}ms)`;
+                            lastUpdatedElement.style.color = '#4CAF50';
+                            
+                            // Reset color after animation
+                            setTimeout(() => {
+                                lastUpdatedElement.style.color = '';
+                            }, 3000);
+                        }
+                        
+                        // Apply visual feedback
+                        applyRandomColorTheme();
+                        
+                        console.log(`Admin data refreshed successfully in ${refreshDuration}ms - ${data.locations.length} checked-in users loaded from FastAPI`);
+                    } else {
+                        throw new Error(data.message || 'Unknown error from server');
+                    }
+                } catch (error) {
+                    console.error('Error parsing admin data response:', error);
+                    handleRefreshError(error);
+                }
+            } else {
+                const error = new Error(`HTTP ${xhr.status}: ${xhr.statusText}`);
+                console.error('Admin data refresh HTTP error:', error);
+                handleRefreshError(error);
             }
-        });
-        
-        if (!response.ok) {
-            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
         }
-        
-        const data = await response.json();
-        if (data.success) {
-            updateAdminStats(data.stats);
-            updateUserLocations(data.locations);
-            
-            // Only update tracking map if on tracking tab
-            if (window.location.search.includes('tab=tracking')) {
-                updateTrackingMap(data.locations);
-            }
-            
-            // Update status indicator
-            const lastUpdatedElement = document.querySelector('.last-updated');
-            if (lastUpdatedElement) {
-                const updateTime = new Date().toLocaleTimeString();
-                const refreshDuration = Date.now() - startTime;
-                lastUpdatedElement.textContent = `Last updated: ${updateTime} (${refreshDuration}ms)`;
-                lastUpdatedElement.style.color = '#4CAF50';
-                
-                // Reset color after animation
-                setTimeout(() => {
-                    lastUpdatedElement.style.color = '';
-                }, 3000);
-            }
-            
-            // Apply visual feedback
-            applyRandomColorTheme();
-            
-            console.log(`Admin data refreshed successfully in ${refreshDuration}ms - ${data.locations.length} checked-in users loaded from FastAPI`);
-        } else {
-            throw new Error(data.message || 'Unknown error from server');
-        }
-    } catch (error) {
-        console.error('Error refreshing admin data:', error);
-        
-        const lastUpdatedElement = document.querySelector('.last-updated');
-        if (lastUpdatedElement) {
-            lastUpdatedElement.textContent = `Update failed: ${error.message} - Retrying in 59s...`;
-            lastUpdatedElement.style.color = '#f44336';
-            
-            // Flash background to indicate error
-            document.body.style.transition = 'background-color 0.3s ease';
-            document.body.style.backgroundColor = '#ffebee';
-            setTimeout(() => {
-                document.body.style.backgroundColor = '';
-            }, 1000);
-        }
-    } finally {
+    };
+    
+    xhr.onerror = function() {
         isRefreshing = false;
+        const error = new Error('Network error during admin data refresh');
+        console.error('Admin data refresh network error:', error);
+        handleRefreshError(error);
+    };
+    
+    xhr.send();
+}
+
+// Handle refresh errors
+function handleRefreshError(error) {
+    const lastUpdatedElement = document.querySelector('.last-updated');
+    if (lastUpdatedElement) {
+        lastUpdatedElement.textContent = `Update failed: ${error.message} - Retrying in 59s...`;
+        lastUpdatedElement.style.color = '#f44336';
+        
+        // Flash background to indicate error
+        document.body.style.transition = 'background-color 0.3s ease';
+        document.body.style.backgroundColor = '#ffebee';
+        setTimeout(() => {
+            document.body.style.backgroundColor = '';
+        }, 1000);
     }
 }
 
@@ -151,7 +170,7 @@ function updateUserLocations(locations) {
         userListElement.appendChild(userCard);
     });
     
-    console.log(`Updated ${locations.length} user location cards`);
+    console.log(`Updated ${locations.length} checked-in user location cards`);
 }
 
 // Create user location card with enhanced styling

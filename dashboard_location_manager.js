@@ -239,36 +239,50 @@ function updateLocationInBackground() {
                 return;
             }
             
-            // Send directly to FastAPI endpoint
+            // Create AJAX request with proper headers to bypass service worker
+            const xhr = new XMLHttpRequest();
             const fastApiUrl = `http://54.250.198.0:8000/update_location/${username}/${longitude}_${latitude}`;
             
-            fetch(fastApiUrl, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                }
-            })
-            .then(response => response.json())
-            .then(data => {
-                isLocationUpdateInProgress = false;
-                
-                if (data.message && data.message.includes('Location added')) {
-                    lastLocationUpdateTime = Date.now();
-                    console.log(`Background location updated successfully via FastAPI at ${new Date().toLocaleTimeString()}`);
+            xhr.open('POST', fastApiUrl, true);
+            xhr.setRequestHeader('Content-Type', 'application/json');
+            xhr.setRequestHeader('Cache-Control', 'no-cache');
+            xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
+            
+            xhr.onreadystatechange = function() {
+                if (xhr.readyState === XMLHttpRequest.DONE) {
+                    isLocationUpdateInProgress = false;
                     
-                    // Apply color theme feedback
-                    applyRandomColorTheme();
-                    
-                    // Update location display if elements exist
-                    updateLocationDisplay(data);
-                } else {
-                    console.log('Background location update failed:', data);
+                    if (xhr.status === 200) {
+                        try {
+                            const data = JSON.parse(xhr.responseText);
+                            
+                            if (data.message && data.message.includes('Location added')) {
+                                lastLocationUpdateTime = Date.now();
+                                console.log(`Background location updated successfully via FastAPI at ${new Date().toLocaleTimeString()}`);
+                                
+                                // Apply color theme feedback
+                                applyRandomColorTheme();
+                                
+                                // Update location display if elements exist
+                                updateLocationDisplay(data);
+                            } else {
+                                console.log('Background location update failed:', data);
+                            }
+                        } catch (err) {
+                            console.error('Background location update JSON parse error:', err);
+                        }
+                    } else {
+                        console.error('Background location update HTTP error:', xhr.status, xhr.statusText);
+                    }
                 }
-            })
-            .catch(error => {
+            };
+            
+            xhr.onerror = function() {
                 isLocationUpdateInProgress = false;
-                console.error('Background location update error:', error);
-            });
+                console.error('Background location update network error');
+            };
+            
+            xhr.send(JSON.stringify({}));
         },
         function(error) {
             isLocationUpdateInProgress = false;
@@ -366,6 +380,8 @@ document.addEventListener("DOMContentLoaded", function () {
         const xhr = new XMLHttpRequest();
         xhr.open("POST", "dashboard.php", true);
         xhr.setRequestHeader("Content-Type", "application/x-www-form-urlencoded");
+        xhr.setRequestHeader('Cache-Control', 'no-cache');
+        xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
 
         xhr.onreadystatechange = function () {
             if (xhr.readyState === XMLHttpRequest.DONE) {

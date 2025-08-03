@@ -1,3 +1,4 @@
+
 /**
  * Location Permission Checker
  * Continuously monitors location permission status and shows warnings
@@ -10,7 +11,8 @@ class LocationPermissionChecker {
         this.isMonitoring = false;
         this.checkInterval = null;
         this.warningElement = null;
-        this.isUserCheckedIn = false;
+        this.isUserCheckedIn = null;
+        this.lastCheckedInStatus = null;
         
         this.init();
     }
@@ -169,7 +171,10 @@ class LocationPermissionChecker {
         const previousStatus = this.permissionStatus;
         this.permissionStatus = status;
         
-        console.log(`Location permission status: ${status}`);
+        // Only log if status actually changed
+        if (previousStatus !== status) {
+            console.log(`Location permission status changed: ${previousStatus} -> ${status}`);
+        }
         
         if (status === 'granted') {
             this.hideLocationWarning();
@@ -182,10 +187,12 @@ class LocationPermissionChecker {
             }
         }
         
-        // Notify other components of permission change
-        window.dispatchEvent(new CustomEvent('locationPermissionChanged', {
-            detail: { status: status, previousStatus: previousStatus }
-        }));
+        // Notify other components of permission change only if status changed
+        if (previousStatus !== status) {
+            window.dispatchEvent(new CustomEvent('locationPermissionChanged', {
+                detail: { status: status, previousStatus: previousStatus }
+            }));
+        }
     }
     
     requestPermission() {
@@ -270,12 +277,18 @@ class LocationPermissionChecker {
         const checkoutBtn = document.getElementById('checkout-btn');
         
         // Determine if user is checked in based on UI state
-        this.isUserCheckedIn = checkoutBtn && 
-                              checkoutBtn.style.display !== 'none' && 
-                              checkinBtn && 
-                              checkinBtn.style.display === 'none';
+        const currentCheckedInStatus = checkoutBtn && 
+                                     checkoutBtn.style.display !== 'none' && 
+                                     checkinBtn && 
+                                     checkinBtn.style.display === 'none';
         
-        console.log(`User checked in status: ${this.isUserCheckedIn}`);
+        // Only log if status changed
+        if (this.lastCheckedInStatus !== currentCheckedInStatus) {
+            console.log(`User checked in status changed: ${this.lastCheckedInStatus} -> ${currentCheckedInStatus}`);
+            this.lastCheckedInStatus = currentCheckedInStatus;
+        }
+        
+        this.isUserCheckedIn = currentCheckedInStatus;
         
         // If user just checked in and location is denied, show warning
         if (this.isUserCheckedIn && this.permissionStatus === 'denied') {
@@ -295,11 +308,14 @@ class LocationPermissionChecker {
         this.checkPermissionStatus();
         this.checkUserStatus();
         
-        // Set up periodic checks
+        // Set up periodic checks - reduced frequency to minimize console spam
         this.checkInterval = setInterval(() => {
-            this.checkPermissionStatus();
-            this.checkUserStatus();
-        }, 5000); // Check every 5 seconds
+            this.checkUserStatus(); // Only check user status frequently
+            // Check permission less frequently
+            if (Date.now() % 30000 < 5000) { // Check permission every ~30 seconds
+                this.checkPermissionStatus();
+            }
+        }, 10000); // Check every 10 seconds instead of 5
         
         console.log('Location permission monitoring started');
     }
