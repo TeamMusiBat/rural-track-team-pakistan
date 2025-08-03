@@ -2,6 +2,7 @@
 // Auto-refresh functionality for admin panel
 let refreshInterval;
 let isRefreshing = false;
+let lastRefreshLogTime = 0;
 
 // Light color themes for visual feedback
 const lightThemes = [
@@ -28,7 +29,7 @@ function startAdminAutoRefresh() {
         }
     }, 59000);
     
-    console.log('Admin auto-refresh started (59 seconds interval)');
+    console.log('Admin auto-refresh started (59 seconds interval) - ONLY CHECKED-IN USERS');
     
     // Initial refresh after 2 seconds
     setTimeout(() => {
@@ -45,24 +46,26 @@ function stopAdminAutoRefresh() {
     }
 }
 
-// Refresh admin data using AJAX to bypass service worker
+// Refresh admin data using AJAX to bypass service worker - ONLY CHECKED-IN USERS
 function refreshAdminData() {
     if (isRefreshing) {
-        console.log('Admin refresh already in progress, skipping');
         return;
     }
     
     isRefreshing = true;
     const startTime = Date.now();
     
-    // Use XMLHttpRequest for better control over service worker bypassing
+    // Use XMLHttpRequest with service worker bypass headers
     const xhr = new XMLHttpRequest();
     const cacheBuster = `?t=${Date.now()}`;
     
     xhr.open('GET', `get_admin_data.php${cacheBuster}`, true);
     xhr.setRequestHeader('Content-Type', 'application/json');
-    xhr.setRequestHeader('Cache-Control', 'no-cache');
+    xhr.setRequestHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    xhr.setRequestHeader('Pragma', 'no-cache');
+    xhr.setRequestHeader('Expires', '0');
     xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
+    xhr.setRequestHeader('X-Bypass-Service-Worker', 'true');
     
     xhr.onreadystatechange = function() {
         if (xhr.readyState === XMLHttpRequest.DONE) {
@@ -98,7 +101,12 @@ function refreshAdminData() {
                         // Apply visual feedback
                         applyRandomColorTheme();
                         
-                        console.log(`Admin data refreshed successfully in ${refreshDuration}ms - ${data.locations.length} checked-in users loaded from FastAPI`);
+                        // Only log success once every 10 minutes to reduce spam
+                        const now = Date.now();
+                        if (now - lastRefreshLogTime > 600000) {
+                            console.log(`Admin data refreshed - ${data.locations.length} checked-in users from FastAPI (${refreshDuration}ms)`);
+                            lastRefreshLogTime = now;
+                        }
                     } else {
                         throw new Error(data.message || 'Unknown error from server');
                     }
@@ -108,7 +116,6 @@ function refreshAdminData() {
                 }
             } else {
                 const error = new Error(`HTTP ${xhr.status}: ${xhr.statusText}`);
-                console.error('Admin data refresh HTTP error:', error);
                 handleRefreshError(error);
             }
         }
@@ -117,7 +124,6 @@ function refreshAdminData() {
     xhr.onerror = function() {
         isRefreshing = false;
         const error = new Error('Network error during admin data refresh');
-        console.error('Admin data refresh network error:', error);
         handleRefreshError(error);
     };
     
@@ -153,7 +159,7 @@ function updateAdminStats(stats) {
     if (currentTimeElement) currentTimeElement.textContent = stats.current_time;
 }
 
-// Update user locations in the admin panel
+// Update user locations in the admin panel - ONLY CHECKED-IN USERS
 function updateUserLocations(locations) {
     const userListElement = document.querySelector('#user-locations-list');
     if (!userListElement) return;
@@ -165,15 +171,20 @@ function updateUserLocations(locations) {
         return;
     }
     
+    // Only show checked-in users (this is already filtered from get_admin_data.php)
     locations.forEach(location => {
         const userCard = createUserLocationCard(location);
         userListElement.appendChild(userCard);
     });
     
-    console.log(`Updated ${locations.length} checked-in user location cards`);
+    // Only log once every 10 minutes
+    const now = Date.now();
+    if (now - lastRefreshLogTime > 600000) {
+        console.log(`Updated ${locations.length} CHECKED-IN user location cards`);
+    }
 }
 
-// Create user location card with enhanced styling
+// Create user location card with enhanced styling - ONLY FOR CHECKED-IN USERS
 function createUserLocationCard(location) {
     const card = document.createElement('div');
     card.className = 'bg-white border rounded-lg p-4 shadow-sm hover:shadow-md transition-shadow';
@@ -205,9 +216,14 @@ function createUserLocationCard(location) {
     return card;
 }
 
-// Update tracking map with FastAPI data
+// Update tracking map with FastAPI data - ONLY CHECKED-IN USERS
 function updateTrackingMap(locations) {
-    console.log('Updating tracking map with', locations.length, 'checked-in user locations from FastAPI');
+    // Only log once every 10 minutes
+    const now = Date.now();
+    if (now - lastRefreshLogTime > 600000) {
+        console.log('Updating tracking map with', locations.length, 'CHECKED-IN user locations from FastAPI');
+    }
+    
     if (typeof updateMapMarkers === 'function') {
         updateMapMarkers(locations);
     }
@@ -226,7 +242,12 @@ function applyRandomColorTheme() {
         setTimeout(() => {
             dashboardElement.style.backgroundColor = '';
         }, 2000);
-        console.log(`Applied ${randomTheme.name} theme for admin refresh feedback`);
+        
+        // Only log theme changes once every 10 minutes
+        const now = Date.now();
+        if (now - lastRefreshLogTime > 600000) {
+            console.log(`Applied ${randomTheme.name} theme for admin refresh feedback`);
+        }
     }
 }
 
@@ -238,17 +259,17 @@ document.addEventListener('DOMContentLoaded', function() {
         document.querySelector('body').classList.contains('admin-page')) {
         
         // Start auto-refresh immediately
-        console.log('Admin page detected, starting auto-refresh');
+        console.log('Admin page detected, starting auto-refresh for CHECKED-IN USERS ONLY');
         startAdminAutoRefresh();
         
-        console.log('Admin panel FastAPI auto-refresh initialized (59 seconds interval)');
+        console.log('Admin panel FastAPI auto-refresh initialized (59 seconds interval) - ONLY CHECKED-IN USERS');
         
         // Create status indicator
         const statusIndicator = document.createElement('div');
         statusIndicator.className = 'refresh-status';
         statusIndicator.innerHTML = `
             <div class="last-updated" style="position: fixed; bottom: 20px; left: 20px; background: rgba(255,255,255,0.9); padding: 8px 12px; border-radius: 6px; font-size: 12px; box-shadow: 0 2px 8px; z-index: 1000;">
-                Connecting to FastAPI...
+                Connecting to FastAPI for checked-in users...
             </div>
         `;
         document.body.appendChild(statusIndicator);

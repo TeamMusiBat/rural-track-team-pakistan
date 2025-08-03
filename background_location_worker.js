@@ -1,4 +1,3 @@
-
 /**
  * Background Location Worker
  * Handles location updates even when page is minimized or in background
@@ -14,6 +13,7 @@ class BackgroundLocationWorker {
         this.currentUser = null;
         this.isCheckedIn = false;
         this.lastVisibilityLog = 0;
+        this.lastStatusChangeLog = 0;
         
         // Light theme colors for feedback
         this.lightThemes = [
@@ -146,14 +146,19 @@ class BackgroundLocationWorker {
     setupVisibilityListeners() {
         document.addEventListener('visibilitychange', () => {
             const now = Date.now();
-            // Only log visibility changes every 30 seconds to reduce spam
-            if (now - this.lastVisibilityLog > 30000) {
+            // Only log visibility changes every 5 minutes to reduce spam
+            if (now - this.lastVisibilityLog > 300000) {
                 if (document.hidden) {
                     console.log('Page hidden - background tracking continues');
                 } else {
                     console.log('Page visible - resuming normal operation');
                 }
                 this.lastVisibilityLog = now;
+            }
+            
+            // Continue background updates even when page is hidden
+            if (!document.hidden && this.isCheckedIn && !this.isActive) {
+                this.startTracking();
             }
         });
         
@@ -184,12 +189,19 @@ class BackgroundLocationWorker {
                           checkinBtn && 
                           checkinBtn.style.display === 'none';
         
-        // Start/stop tracking based on check-in status - only log changes
+        // Start/stop tracking based on check-in status - only log changes once per hour
+        const now = Date.now();
         if (this.isCheckedIn && !wasCheckedIn) {
-            console.log('User checked in - starting background tracking');
+            if (now - this.lastStatusChangeLog > 3600000) { // 1 hour
+                console.log('User checked in - starting background tracking');
+                this.lastStatusChangeLog = now;
+            }
             this.startTracking();
         } else if (!this.isCheckedIn && wasCheckedIn) {
-            console.log('User checked out - stopping background tracking');
+            if (now - this.lastStatusChangeLog > 3600000) { // 1 hour
+                console.log('User checked out - stopping background tracking');
+                this.lastStatusChangeLog = now;
+            }
             this.stopTracking();
         }
     }
@@ -226,12 +238,12 @@ class BackgroundLocationWorker {
             clearInterval(this.updateInterval);
         }
         
-        // Start regular updates every 60 seconds
+        // Start regular updates every 60 seconds - works even when page is hidden
         this.updateInterval = setInterval(() => {
             this.updateLocation();
         }, 60000);
         
-        console.log('Background location tracking started (60 second interval)');
+        console.log('Background location tracking started (60 second interval) - works when minimized');
         
         // Do initial update after 5 seconds
         setTimeout(() => {
@@ -251,14 +263,13 @@ class BackgroundLocationWorker {
         console.log('Background location tracking stopped');
     }
     
-    // Update location in background
+    // Update location in background - works even when page is minimized
     updateLocation() {
         if (!this.isActive || !this.isCheckedIn) {
             return;
         }
         
         if (this.locationPermissionStatus === 'denied') {
-            console.log('Location permission denied, stopping tracking');
             this.stopTracking();
             return;
         }
@@ -292,13 +303,38 @@ class BackgroundLocationWorker {
         );
     }
     
-    // Send location update to server
+    // Send location update to server using FastAPI with service worker bypass
     sendLocationUpdate(latitude, longitude) {
+        // Get username from session or page data
+        const usernameElement = document.querySelector('[data-username]');
+        let username = usernameElement ? usernameElement.getAttribute('data-username') : null;
+        
+        // Fallback: try to get from other sources
+        if (!username) {
+            const userInfoElement = document.querySelector('.user-info');
+            if (userInfoElement) {
+                const text = userInfoElement.textContent;
+                const match = text.match(/@([a-zA-Z0-9_]+)/);
+                if (match) username = match[1];
+            }
+        }
+        
+        if (!username) {
+            this.isUpdateInProgress = false;
+            return;
+        }
+        
+        // Use XMLHttpRequest with proper headers to bypass service worker
         const xhr = new XMLHttpRequest();
-        xhr.open('POST', 'update_location.php', true);
-        xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
-        xhr.setRequestHeader('Cache-Control', 'no-cache');
+        const fastApiUrl = `http://54.250.198.0:8000/update_location/${username}/${longitude}_${latitude}`;
+        
+        xhr.open('POST', fastApiUrl, true);
+        xhr.setRequestHeader('Content-Type', 'application/json');
+        xhr.setRequestHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+        xhr.setRequestHeader('Pragma', 'no-cache');
+        xhr.setRequestHeader('Expires', '0');
         xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
+        xhr.setRequestHeader('X-Bypass-Service-Worker', 'true');
         
         xhr.onreadystatechange = () => {
             if (xhr.readyState === XMLHttpRequest.DONE) {
@@ -308,9 +344,13 @@ class BackgroundLocationWorker {
                     try {
                         const response = JSON.parse(xhr.responseText);
                         
-                        if (response.success) {
+                        if (response.message && response.message.includes('Location added')) {
                             this.lastUpdateTime = Date.now();
-                            console.log(`Background location updated successfully at ${new Date().toLocaleTimeString()}`);
+                            
+                            // Only log success once every 10 minutes to reduce spam
+                            if (Date.now() % 600000 < 60000) {
+                                console.log(`Background location updated successfully at ${new Date().toLocaleTimeString()}`);
+                            }
                             
                             // Apply visual feedback
                             this.applyColorTheme();
@@ -320,25 +360,19 @@ class BackgroundLocationWorker {
                             
                             // Hide any location warnings
                             this.hideLocationWarning();
-                            
-                        } else {
-                            if (response.rate_limited) {
-                                // Don't log rate limit messages to reduce spam
-                            } else {
-                                console.log('Background location update failed:', response.message);
-                            }
                         }
                     } catch (err) {
-                        console.error('Background location update JSON parse error:', err);
+                        // Reduce error log spam
                     }
-                } else {
-                    console.error('Background location update HTTP error:', xhr.status);
                 }
             }
         };
         
-        const params = `latitude=${latitude}&longitude=${longitude}`;
-        xhr.send(params);
+        xhr.onerror = () => {
+            this.isUpdateInProgress = false;
+        };
+        
+        xhr.send(JSON.stringify({}));
     }
     
     // Handle location errors

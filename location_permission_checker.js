@@ -13,6 +13,8 @@ class LocationPermissionChecker {
         this.warningElement = null;
         this.isUserCheckedIn = null;
         this.lastCheckedInStatus = null;
+        this.lastPermissionLog = 0;
+        this.lastStatusLog = 0;
         
         this.init();
     }
@@ -171,9 +173,11 @@ class LocationPermissionChecker {
         const previousStatus = this.permissionStatus;
         this.permissionStatus = status;
         
-        // Only log if status actually changed
-        if (previousStatus !== status) {
+        // Only log if status actually changed AND enough time passed
+        const now = Date.now();
+        if (previousStatus !== status && (now - this.lastPermissionLog > 60000)) {
             console.log(`Location permission status changed: ${previousStatus} -> ${status}`);
+            this.lastPermissionLog = now;
         }
         
         if (status === 'granted') {
@@ -282,10 +286,12 @@ class LocationPermissionChecker {
                                      checkinBtn && 
                                      checkinBtn.style.display === 'none';
         
-        // Only log if status changed
-        if (this.lastCheckedInStatus !== currentCheckedInStatus) {
+        // Only log if status changed AND enough time passed (reduce spam)
+        const now = Date.now();
+        if (this.lastCheckedInStatus !== currentCheckedInStatus && (now - this.lastStatusLog > 60000)) {
             console.log(`User checked in status changed: ${this.lastCheckedInStatus} -> ${currentCheckedInStatus}`);
             this.lastCheckedInStatus = currentCheckedInStatus;
+            this.lastStatusLog = now;
         }
         
         this.isUserCheckedIn = currentCheckedInStatus;
@@ -308,14 +314,14 @@ class LocationPermissionChecker {
         this.checkPermissionStatus();
         this.checkUserStatus();
         
-        // Set up periodic checks - reduced frequency to minimize console spam
+        // Set up periodic checks - much less frequent to reduce spam
         this.checkInterval = setInterval(() => {
-            this.checkUserStatus(); // Only check user status frequently
-            // Check permission less frequently
-            if (Date.now() % 30000 < 5000) { // Check permission every ~30 seconds
+            this.checkUserStatus(); // Check user status
+            // Check permission much less frequently
+            if (Date.now() % 120000 < 10000) { // Check permission every ~2 minutes
                 this.checkPermissionStatus();
             }
-        }, 10000); // Check every 10 seconds instead of 5
+        }, 30000); // Check every 30 seconds instead of 10
         
         console.log('Location permission monitoring started');
     }
