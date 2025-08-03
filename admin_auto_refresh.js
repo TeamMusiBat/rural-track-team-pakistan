@@ -37,40 +37,76 @@ function stopAdminAutoRefresh() {
     }
 }
 
-// Refresh admin data from FastAPI endpoints
+// Refresh admin data from FastAPI endpoints with enhanced error handling
 async function refreshAdminData() {
-    if (isRefreshing) return;
+    if (isRefreshing) {
+        console.log('Admin refresh already in progress, skipping');
+        return;
+    }
+    
     isRefreshing = true;
+    const startTime = Date.now();
+    
     try {
-        const response = await fetch('get_admin_data.php', {
+        // Add cache busting to prevent stale data
+        const cacheBuster = `?t=${Date.now()}`;
+        const response = await fetch(`get_admin_data.php${cacheBuster}`, {
             method: 'GET',
-            headers: { 'Content-Type': 'application/json' }
+            headers: { 
+                'Content-Type': 'application/json',
+                'Cache-Control': 'no-cache'
+            }
         });
-        if (!response.ok) throw new Error('Network response was not ok');
+        
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+        
         const data = await response.json();
         if (data.success) {
             updateAdminStats(data.stats);
             updateUserLocations(data.locations);
+            
+            // Only update tracking map if on tracking tab
             if (window.location.search.includes('tab=tracking')) {
                 updateTrackingMap(data.locations);
             }
+            
+            // Update status indicator
             const lastUpdatedElement = document.querySelector('.last-updated');
             if (lastUpdatedElement) {
-                lastUpdatedElement.textContent = `Last updated: ${data.stats.last_updated}`;
+                const updateTime = new Date().toLocaleTimeString();
+                const refreshDuration = Date.now() - startTime;
+                lastUpdatedElement.textContent = `Last updated: ${updateTime} (${refreshDuration}ms)`;
                 lastUpdatedElement.style.color = '#4CAF50';
+                
+                // Reset color after animation
                 setTimeout(() => {
                     lastUpdatedElement.style.color = '';
-                }, 2000);
+                }, 3000);
             }
+            
+            // Apply visual feedback
             applyRandomColorTheme();
-            console.log(`Admin data refreshed successfully - ${data.locations.length} checked-in users loaded from FastAPI`);
+            
+            console.log(`Admin data refreshed successfully in ${refreshDuration}ms - ${data.locations.length} checked-in users loaded from FastAPI`);
+        } else {
+            throw new Error(data.message || 'Unknown error from server');
         }
     } catch (error) {
         console.error('Error refreshing admin data:', error);
+        
         const lastUpdatedElement = document.querySelector('.last-updated');
         if (lastUpdatedElement) {
-            lastUpdatedElement.textContent = 'Update failed - retrying...';
+            lastUpdatedElement.textContent = `Update failed: ${error.message} - Retrying in 59s...`;
             lastUpdatedElement.style.color = '#f44336';
+            
+            // Flash background to indicate error
+            document.body.style.transition = 'background-color 0.3s ease';
+            document.body.style.backgroundColor = '#ffebee';
+            setTimeout(() => {
+                document.body.style.backgroundColor = '';
+            }, 1000);
         }
     } finally {
         isRefreshing = false;

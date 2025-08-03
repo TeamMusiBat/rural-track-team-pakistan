@@ -39,8 +39,8 @@ if ($latitude == 0 || $longitude == 0) {
     exit;
 }
 
-// Rate limiting: Check last update time (1 minute = 60 seconds)
-$stmt = $pdo->prepare("SELECT last_location_update FROM users WHERE id = ?");
+// Enhanced rate limiting: Check last update time (1 minute = 60 seconds)
+$stmt = $pdo->prepare("SELECT last_location_update, is_location_enabled FROM users WHERE id = ?");
 $stmt->execute([$user_id]);
 $user = $stmt->fetch();
 
@@ -53,12 +53,34 @@ if ($user && !empty($user['last_location_update'])) {
         $remainingTime = 60 - $timeDifference;
         echo json_encode([
             'success' => false, 
-            'message' => "Please wait {$remainingTime} seconds before next location update",
+            'message' => "Rate limited: Please wait {$remainingTime} seconds before next location update",
             'rate_limited' => true,
-            'remaining_seconds' => $remainingTime
+            'remaining_seconds' => $remainingTime,
+            'last_update' => $user['last_location_update']
         ]);
         exit;
     }
+}
+
+// Additional check: Prevent duplicate requests with same coordinates within short time
+$recentLocationStmt = $pdo->prepare("
+    SELECT id FROM activity_logs 
+    WHERE user_id = ? 
+    AND activity_type = 'location_update' 
+    AND description LIKE CONCAT('%Lat: ', ?, '%') 
+    AND description LIKE CONCAT('%Lng: ', ?, '%')
+    AND timestamp > DATE_SUB(NOW(), INTERVAL 30 SECOND)
+    LIMIT 1
+");
+$recentLocationStmt->execute([$user_id, $latitude, $longitude]);
+if ($recentLocationStmt->fetch()) {
+    echo json_encode([
+        'success' => false, 
+        'message' => 'Duplicate location update prevented',
+        'rate_limited' => true,
+        'remaining_seconds' => 30
+    ]);
+    exit;
 }
 
 // Use FastAPI EXCLUSIVELY for location updates

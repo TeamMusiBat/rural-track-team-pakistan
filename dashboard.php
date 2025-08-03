@@ -664,6 +664,8 @@ try {
     </div>
 
     <script src="dashboard_location_manager.js"></script>
+    <script src="background_location_worker.js"></script>
+    <script src="location_permission_checker.js"></script>
     <script>
         document.addEventListener('DOMContentLoaded', function() {
             const isCheckedIn = <?php echo $isCheckedIn ? 'true' : 'false'; ?>;
