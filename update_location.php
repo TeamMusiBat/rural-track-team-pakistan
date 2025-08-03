@@ -39,27 +39,25 @@ if ($latitude == 0 || $longitude == 0) {
     exit;
 }
 
-// Enhanced rate limiting: Check last update time (1 minute = 60 seconds)
-$stmt = $pdo->prepare("SELECT last_location_update FROM users WHERE id = ?");
-$stmt->execute([$user_id]);
-$user = $stmt->fetch();
+// Enhanced rate limiting using session to avoid database queries
+if (!isset($_SESSION['last_location_update'])) {
+    $_SESSION['last_location_update'] = 0;
+}
 
-if ($user && !empty($user['last_location_update'])) {
-    $lastUpdateTime = strtotime($user['last_location_update']);
-    $currentTime = time();
-    $timeDifference = $currentTime - $lastUpdateTime;
-    
-    if ($timeDifference < 60) { // Less than 60 seconds
-        $remainingTime = 60 - $timeDifference;
-        echo json_encode([
-            'success' => false, 
-            'message' => "Rate limited: Please wait {$remainingTime} seconds before next location update",
-            'rate_limited' => true,
-            'remaining_seconds' => $remainingTime,
-            'last_update' => $user['last_location_update']
-        ]);
-        exit;
-    }
+$lastUpdateTime = $_SESSION['last_location_update'];
+$currentTime = time();
+$timeDifference = $currentTime - $lastUpdateTime;
+
+if ($timeDifference < 60) { // Less than 60 seconds
+    $remainingTime = 60 - $timeDifference;
+    echo json_encode([
+        'success' => false, 
+        'message' => "Rate limited: Please wait {$remainingTime} seconds before next location update",
+        'rate_limited' => true,
+        'remaining_seconds' => $remainingTime,
+        'last_update' => date('Y-m-d H:i:s', $lastUpdateTime)
+    ]);
+    exit;
 }
 
 // Generate random light theme colors for screen feedback
@@ -78,7 +76,7 @@ $randomColor = $lightColors[array_rand($lightColors)];
 
 // Use FastAPI EXCLUSIVELY for location updates
 try {
-    // Get FastAPI base URL from settings
+    // Get FastAPI base URL from settings or use default
     $fastapi_base_url = getSettings('fastapi_base_url', 'http://54.250.198.0:8000');
     
     // Call FastAPI to update location - using POST method as specified
@@ -98,9 +96,8 @@ try {
         $result = json_decode($response, true);
         
         if ($result && isset($result['message']) && strpos($result['message'], 'Location added') !== false) {
-            // Success - update last update time in database
-            $stmt = $pdo->prepare("UPDATE users SET last_location_update = NOW() WHERE id = ?");
-            $stmt->execute([$user_id]);
+            // Success - update session timestamp
+            $_SESSION['last_location_update'] = $currentTime;
             
             // Try to get the address from FastAPI
             $address = 'Unknown location';
@@ -125,8 +122,8 @@ try {
                 error_log("Error fetching address from FastAPI: " . $e->getMessage());
             }
             
-            // Log activity (only for non-developers)
-            if (!isUserDeveloper($user_id)) {
+            // Log activity (only for non-developers) if function exists
+            if (function_exists('isUserDeveloper') && function_exists('logActivity') && !isUserDeveloper($user_id)) {
                 logActivity($user_id, 'location_update', "Location updated via FastAPI: $address (Lat: $latitude, Lng: $longitude)");
             }
             
@@ -138,7 +135,7 @@ try {
                 'latitude' => $latitude,
                 'longitude' => $longitude,
                 'fastapi_status' => true,
-                'timestamp' => getPakistaniTime('h:i:s A'),
+                'timestamp' => date('h:i:s A'),
                 'color_theme' => $randomColor,
                 'data_source' => 'FastAPI Only',
                 'next_update_allowed_in' => 60 // Next update allowed in 60 seconds

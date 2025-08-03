@@ -27,69 +27,84 @@ try {
     
     // Call FastAPI to get all locations using GET method
     $api_url = $fastapi_base_url . "/fetch_all_locations";
-    $response = makeApiRequest($api_url, 'GET');
+    
+    $context = stream_context_create([
+        'http' => [
+            'method' => 'GET',
+            'header' => "Content-Type: application/json\r\n",
+            'timeout' => 10
+        ]
+    ]);
+    
+    $response = @file_get_contents($api_url, false, $context);
 
-    if ($response !== false && is_array($response)) {
-        // Convert FastAPI response to our format - ONLY CHECKED IN USERS
-        foreach ($response as $location) {
-            if (isset($location['username'])) {
-                // Get user details from database
-                $stmt = $pdo->prepare("SELECT * FROM users WHERE username = ?");
-                $stmt->execute([$location['username']]);
-                $user = $stmt->fetch();
-                
-                if ($user) {
-                    // Check if user should be visible to current admin
-                    if ($loggedInUserRole === 'master' && ($user['role'] === 'developer' || $user['role'] === 'master')) {
-                        continue; // Skip developers and masters for master users
-                    }
+    if ($response !== false) {
+        $fastapi_locations = json_decode($response, true);
+        
+        if (is_array($fastapi_locations)) {
+            // Convert FastAPI response to our format - ONLY CHECKED IN USERS
+            foreach ($fastapi_locations as $location) {
+                if (isset($location['username'])) {
+                    // Get user details from database
+                    $stmt = $pdo->prepare("SELECT * FROM users WHERE username = ?");
+                    $stmt->execute([$location['username']]);
+                    $user = $stmt->fetch();
                     
-                    // Check if user is CURRENTLY checked in using Pakistani time
-                    $stmt = $pdo->prepare("SELECT id, check_in FROM attendance WHERE user_id = ? AND check_out IS NULL ORDER BY id DESC LIMIT 1");
-                    $stmt->execute([$user['id']]);
-                    $checkin = $stmt->fetch();
-                    $isCheckedIn = !empty($checkin);
-                    
-                    // ONLY INCLUDE CHECKED IN USERS
-                    if ($isCheckedIn) {
-                        // Calculate work duration if checked in using Pakistani time
-                        $workDuration = '';
-                        if ($checkin) {
-                            $checkinTime = new DateTime($checkin['check_in'], new DateTimeZone('Asia/Karachi'));
-                            $now = new DateTime('now', new DateTimeZone('Asia/Karachi'));
-                            $totalSeconds = $now->getTimestamp() - $checkinTime->getTimestamp();
-                            $hours = floor($totalSeconds / 3600);
-                            $minutes = floor(($totalSeconds % 3600) / 60);
-                            $workDuration = sprintf('%d:%02d', $hours, $minutes);
+                    if ($user) {
+                        // Check if user should be visible to current admin
+                        if ($loggedInUserRole === 'master' && ($user['role'] === 'developer' || $user['role'] === 'master')) {
+                            continue; // Skip developers and masters for master users
                         }
                         
-                        $locations[] = [
-                            'user_id' => $user['id'],
-                            'username' => $user['username'],
-                            'full_name' => $user['full_name'],
-                            'role' => $user['role'],
-                            'user_role' => $user['user_role'],
-                            'latitude' => (float)$location['latitude'],
-                            'longitude' => (float)$location['longitude'],
-                            'address' => $location['address'] ?? 'Unknown location',
-                            'is_location_enabled' => 1,
-                            'is_checked_in' => true, // All users in this list are checked in
-                            'work_duration' => $workDuration,
-                            'timestamp' => getPakistaniTime('Y-m-d H:i:s'),
-                            'formatted_time' => getPakistaniTime('h:i A')
-                        ];
+                        // Check if user is CURRENTLY checked in
+                        $stmt = $pdo->prepare("SELECT id, check_in FROM attendance WHERE user_id = ? AND check_out IS NULL ORDER BY id DESC LIMIT 1");
+                        $stmt->execute([$user['id']]);
+                        $checkin = $stmt->fetch();
+                        $isCheckedIn = !empty($checkin);
+                        
+                        // ONLY INCLUDE CHECKED IN USERS
+                        if ($isCheckedIn) {
+                            // Calculate work duration if checked in
+                            $workDuration = '';
+                            if ($checkin) {
+                                $checkinTime = new DateTime($checkin['check_in'], new DateTimeZone('Asia/Karachi'));
+                                $now = new DateTime('now', new DateTimeZone('Asia/Karachi'));
+                                $totalSeconds = $now->getTimestamp() - $checkinTime->getTimestamp();
+                                $hours = floor($totalSeconds / 3600);
+                                $minutes = floor(($totalSeconds % 3600) / 60);
+                                $workDuration = sprintf('%d:%02d', $hours, $minutes);
+                            }
+                            
+                            $locations[] = [
+                                'user_id' => $user['id'],
+                                'username' => $user['username'],
+                                'full_name' => $user['full_name'],
+                                'role' => $user['role'],
+                                'user_role' => $user['user_role'],
+                                'latitude' => (float)$location['latitude'],
+                                'longitude' => (float)$location['longitude'],
+                                'address' => $location['address'] ?? 'Unknown location',
+                                'is_location_enabled' => 1,
+                                'is_checked_in' => true, // All users in this list are checked in
+                                'work_duration' => $workDuration,
+                                'timestamp' => date('Y-m-d H:i:s'),
+                                'formatted_time' => date('h:i A')
+                            ];
+                        }
                     }
                 }
             }
+        } else {
+            error_log("FastAPI fetch_all_locations returned invalid response: " . json_encode($fastapi_locations));
         }
     } else {
-        error_log("FastAPI fetch_all_locations returned invalid response: " . json_encode($response));
+        error_log("Failed to fetch locations from FastAPI endpoint: " . $api_url);
     }
 } catch (Exception $e) {
     error_log("Admin data fetch error: " . $e->getMessage());
 }
 
-// Get total stats using Pakistani time - count only checked in users
+// Get total stats - count only checked in users
 $totalUsers = 0;
 $checkedInUsers = count($locations); // All users in locations array are checked in
 $totalLocations = count($locations);
@@ -101,6 +116,13 @@ if ($loggedInUserRole === 'developer') {
 } else {
     $stmt = $pdo->query("SELECT COUNT(*) as count FROM users WHERE role = 'user'");
     $totalUsers = $stmt->fetch()['count'];
+}
+
+// Get Pakistani time function
+function getPakistaniTime($format = 'Y-m-d H:i:s') {
+    $pakistaniTimezone = new DateTimeZone('Asia/Karachi');
+    $now = new DateTime('now', $pakistaniTimezone);
+    return $now->format($format);
 }
 
 echo json_encode([

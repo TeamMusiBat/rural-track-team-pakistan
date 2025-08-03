@@ -1,3 +1,4 @@
+
 // Auto-refresh functionality for admin panel
 let refreshInterval;
 let isRefreshing = false;
@@ -14,18 +15,23 @@ const lightThemes = [
     { bg: '#E8F5E8', border: '#8BC34A', name: 'Lime' }
 ];
 
-// Start auto-refresh for admin panel
+// Start auto-refresh for admin panel every 59 seconds
 function startAdminAutoRefresh() {
     if (refreshInterval) {
         clearInterval(refreshInterval);
     }
-    // Refresh every 59 seconds
+    
+    // Refresh every 59 seconds to respect hosting limits
     refreshInterval = setInterval(() => {
         if (!isRefreshing) {
             refreshAdminData();
         }
     }, 59000);
+    
     console.log('Admin auto-refresh started (59 seconds interval)');
+    
+    // Initial refresh
+    refreshAdminData();
 }
 
 // Stop auto-refresh
@@ -119,6 +125,7 @@ function updateAdminStats(stats) {
     const checkedInUsersElement = document.querySelector('#checked-in-users');
     const totalLocationsElement = document.querySelector('#total-locations');
     const currentTimeElement = document.querySelector('#current-time');
+    
     if (totalUsersElement) totalUsersElement.textContent = stats.total_users;
     if (checkedInUsersElement) checkedInUsersElement.textContent = stats.checked_in_users;
     if (totalLocationsElement) totalLocationsElement.textContent = stats.total_locations;
@@ -129,15 +136,19 @@ function updateAdminStats(stats) {
 function updateUserLocations(locations) {
     const userListElement = document.querySelector('#user-locations-list');
     if (!userListElement) return;
+    
     userListElement.innerHTML = '';
+    
     if (locations.length === 0) {
         userListElement.innerHTML = '<div class="no-data-message">No checked-in users with location data available</div>';
         return;
     }
+    
     locations.forEach(location => {
         const userCard = createUserLocationCard(location);
         userListElement.appendChild(userCard);
     });
+    
     console.log(`Updated ${locations.length} user location cards`);
 }
 
@@ -166,7 +177,7 @@ function createUserLocationCard(location) {
             <a href="https://maps.google.com/?q=${location.latitude},${location.longitude}" 
                target="_blank" 
                class="inline-flex items-center px-3 py-1 bg-blue-600 text-white text-xs rounded hover:bg-blue-700 transition-colors">
-                <i class="fas fa-map-marker-alt"></i> View in Google Maps
+                <i class="fas fa-map-marker-alt mr-1"></i> View in Google Maps
             </a>
         </div>
     `;
@@ -194,16 +205,19 @@ function applyRandomColorTheme() {
         setTimeout(() => {
             dashboardElement.style.backgroundColor = '';
         }, 2000);
-        console.log(`Applied ${randomTheme.name} theme for location update feedback`);
+        console.log(`Applied ${randomTheme.name} theme for admin refresh feedback`);
     }
 }
 
 // Initialize auto-refresh when page loads
 document.addEventListener('DOMContentLoaded', function() {
     if (window.location.pathname.includes('admin.php') || window.location.pathname.includes('admin_tracking_fixes.php')) {
+        // Start auto-refresh immediately
         startAdminAutoRefresh();
-        refreshAdminData();
+        
         console.log('Admin panel FastAPI auto-refresh initialized (59 seconds interval)');
+        
+        // Create status indicator
         const statusIndicator = document.createElement('div');
         statusIndicator.className = 'refresh-status';
         statusIndicator.innerHTML = `
@@ -215,6 +229,7 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 });
 
+// Clean up on page unload
 window.addEventListener('beforeunload', function() {
     stopAdminAutoRefresh();
 });

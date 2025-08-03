@@ -187,7 +187,7 @@ function isUserCheckedIn() {
             checkoutBtn && checkoutBtn.style.display !== 'none');
 }
 
-// Background location update function
+// Background location update function using FastAPI exclusively
 function updateLocationInBackground() {
     if (locationPermissionStatus === 'denied') {
         console.log('Location permission denied, skipping background update');
@@ -289,7 +289,7 @@ function updateLocationDisplay(response) {
     }
 }
 
-// Start background location updates
+// Start background location updates every 60 seconds
 function startBackgroundLocationUpdates() {
     if (backgroundLocationInterval) {
         clearInterval(backgroundLocationInterval);
@@ -382,10 +382,13 @@ document.addEventListener("DOMContentLoaded", function () {
                             stopBackgroundLocationUpdates();
                         }
                         
-                        // Force page refresh after UI update
+                        // Apply color theme feedback for successful action
+                        applyRandomColorTheme();
+                        
+                        // Force page refresh after UI update to ensure everything is synced
                         setTimeout(() => {
                             window.location.reload(true);
-                        }, 1000);
+                        }, 1500);
                     } else {
                         alert("Failed: " + response.message);
                         
@@ -415,6 +418,7 @@ document.addEventListener("DOMContentLoaded", function () {
         
         // Start background updates if user is checked in
         if (isUserCheckedIn()) {
+            console.log('User is checked in, starting background location updates');
             startBackgroundLocationUpdates();
         }
         
