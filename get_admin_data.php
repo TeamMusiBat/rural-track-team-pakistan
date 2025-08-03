@@ -31,8 +31,8 @@ try {
     $context = stream_context_create([
         'http' => [
             'method' => 'GET',
-            'header' => "Content-Type: application/json\r\n",
-            'timeout' => 10
+            'header' => "Content-Type: application/json\r\nUser-Agent: SmartOutreach-Tracker/1.0\r\n",
+            'timeout' => 15
         ]
     ]);
     
@@ -98,7 +98,9 @@ try {
             error_log("FastAPI fetch_all_locations returned invalid response: " . json_encode($fastapi_locations));
         }
     } else {
-        error_log("Failed to fetch locations from FastAPI endpoint: " . $api_url);
+        $error = error_get_last();
+        $errorMessage = $error ? $error['message'] : 'Unknown connection error';
+        error_log("Failed to fetch locations from FastAPI endpoint: " . $api_url . " | Error: " . $errorMessage);
     }
 } catch (Exception $e) {
     error_log("Admin data fetch error: " . $e->getMessage());
@@ -134,6 +136,7 @@ echo json_encode([
         'total_locations' => $totalLocations,
         'last_updated' => getPakistaniTime('h:i:s A'),
         'current_time' => getPakistaniTime('Y-m-d h:i:s A'),
-        'fastapi_endpoint' => $fastapi_base_url . "/fetch_all_locations"
+        'fastapi_endpoint' => $fastapi_base_url . "/fetch_all_locations",
+        'locations_found' => count($locations)
     ]
 ]);

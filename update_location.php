@@ -85,8 +85,8 @@ try {
     $context = stream_context_create([
         'http' => [
             'method' => 'POST',
-            'header' => "Content-Type: application/json\r\n",
-            'timeout' => 10
+            'header' => "Content-Type: application/json\r\nUser-Agent: SmartOutreach-Tracker/1.0\r\n",
+            'timeout' => 15
         ]
     ]);
     
@@ -106,8 +106,8 @@ try {
                 $fetch_context = stream_context_create([
                     'http' => [
                         'method' => 'POST',
-                        'header' => "Content-Type: application/json\r\n",
-                        'timeout' => 5
+                        'header' => "Content-Type: application/json\r\nUser-Agent: SmartOutreach-Tracker/1.0\r\n",
+                        'timeout' => 8
                     ]
                 ]);
                 
@@ -138,17 +138,21 @@ try {
                 'timestamp' => date('h:i:s A'),
                 'color_theme' => $randomColor,
                 'data_source' => 'FastAPI Only',
-                'next_update_allowed_in' => 60 // Next update allowed in 60 seconds
+                'next_update_allowed_in' => 60, // Next update allowed in 60 seconds
+                'username' => $username
             ]);
         } else {
             throw new Exception('FastAPI returned unexpected response: ' . json_encode($result));
         }
     } else {
-        throw new Exception('Failed to connect to FastAPI endpoint');
+        // Get more detailed error info
+        $error = error_get_last();
+        $errorMessage = $error ? $error['message'] : 'Unknown connection error';
+        throw new Exception('Failed to connect to FastAPI endpoint: ' . $errorMessage);
     }
 } catch (Exception $e) {
-    // Log the error
-    error_log("FastAPI location update error for user {$username}: " . $e->getMessage());
+    // Log the error with more details
+    error_log("FastAPI location update error for user {$username}: " . $e->getMessage() . " | URL: " . ($api_url ?? 'Unknown'));
     
     // Return error response
     echo json_encode([
@@ -156,7 +160,8 @@ try {
         'message' => 'Failed to update location via FastAPI: ' . $e->getMessage(),
         'fastapi_status' => false,
         'data_source' => 'FastAPI Only - Update Failed',
-        'api_url' => $api_url ?? 'Unknown'
+        'api_url' => $api_url ?? 'Unknown',
+        'username' => $username
     ]);
 }
 

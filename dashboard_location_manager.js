@@ -221,7 +221,17 @@ function updateLocationInBackground() {
             
             // Get username from session or page data
             const usernameElement = document.querySelector('[data-username]');
-            const username = usernameElement ? usernameElement.getAttribute('data-username') : null;
+            let username = usernameElement ? usernameElement.getAttribute('data-username') : null;
+            
+            // Fallback: try to get from other sources
+            if (!username) {
+                const userInfoElement = document.querySelector('.user-info');
+                if (userInfoElement) {
+                    const text = userInfoElement.textContent;
+                    const match = text.match(/@([a-zA-Z0-9_]+)/);
+                    if (match) username = match[1];
+                }
+            }
             
             if (!username) {
                 console.error('Username not found for background location update');
@@ -374,11 +384,13 @@ document.addEventListener("DOMContentLoaded", function () {
                             checkinBtn.style.display = 'none';
                             checkoutBtn.style.display = 'inline-block';
                             // Start background location updates
+                            console.log('Starting background location tracking after check-in');
                             startBackgroundLocationUpdates();
                         } else if (action === "checkout") {
                             checkinBtn.style.display = 'inline-block';
                             checkoutBtn.style.display = 'none';
                             // Stop background location updates
+                            console.log('Stopping background location tracking after check-out');
                             stopBackgroundLocationUpdates();
                         }
                         
@@ -416,11 +428,15 @@ document.addEventListener("DOMContentLoaded", function () {
         // Set up page visibility listener
         document.addEventListener('visibilitychange', handleVisibilityChange);
         
-        // Start background updates if user is checked in
-        if (isUserCheckedIn()) {
-            console.log('User is checked in, starting background location updates');
-            startBackgroundLocationUpdates();
-        }
+        // Check if user is already checked in and start background updates
+        setTimeout(() => {
+            if (isUserCheckedIn()) {
+                console.log('User is checked in on page load, starting background location updates');
+                startBackgroundLocationUpdates();
+            } else {
+                console.log('User is not checked in on page load');
+            }
+        }, 1000);
         
         console.log('Location manager initialized');
     }

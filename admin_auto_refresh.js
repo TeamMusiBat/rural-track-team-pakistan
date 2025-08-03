@@ -30,8 +30,10 @@ function startAdminAutoRefresh() {
     
     console.log('Admin auto-refresh started (59 seconds interval)');
     
-    // Initial refresh
-    refreshAdminData();
+    // Initial refresh after 2 seconds
+    setTimeout(() => {
+        refreshAdminData();
+    }, 2000);
 }
 
 // Stop auto-refresh
@@ -211,8 +213,13 @@ function applyRandomColorTheme() {
 
 // Initialize auto-refresh when page loads
 document.addEventListener('DOMContentLoaded', function() {
-    if (window.location.pathname.includes('admin.php') || window.location.pathname.includes('admin_tracking_fixes.php')) {
+    // Only start on admin pages
+    if (window.location.pathname.includes('admin.php') || 
+        window.location.pathname.includes('admin_tracking_fixes.php') ||
+        document.querySelector('body').classList.contains('admin-page')) {
+        
         // Start auto-refresh immediately
+        console.log('Admin page detected, starting auto-refresh');
         startAdminAutoRefresh();
         
         console.log('Admin panel FastAPI auto-refresh initialized (59 seconds interval)');
@@ -221,7 +228,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const statusIndicator = document.createElement('div');
         statusIndicator.className = 'refresh-status';
         statusIndicator.innerHTML = `
-            <div class="last-updated" style="position: fixed; bottom: 20px; left: 20px; background: rgba(255,255,255,0.9); padding: 8px 12px; border-radius: 6px; font-size: 12px; box-shadow: 0 2px 8px;">
+            <div class="last-updated" style="position: fixed; bottom: 20px; left: 20px; background: rgba(255,255,255,0.9); padding: 8px 12px; border-radius: 6px; font-size: 12px; box-shadow: 0 2px 8px; z-index: 1000;">
                 Connecting to FastAPI...
             </div>
         `;
@@ -234,7 +241,7 @@ window.addEventListener('beforeunload', function() {
     stopAdminAutoRefresh();
 });
 
-// Export functions for global use
+// Make functions available globally
 window.startAdminAutoRefresh = startAdminAutoRefresh;
 window.stopAdminAutoRefresh = stopAdminAutoRefresh;
 window.refreshAdminData = refreshAdminData;
