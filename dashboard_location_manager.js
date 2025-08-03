@@ -1,3 +1,4 @@
+// Dashboard Location Manager with reliable background location updates
 
 let userLatitude = null;
 let userLongitude = null;
@@ -20,22 +21,18 @@ const lightThemeColors = [
     { bg: '#E8F5E8', border: '#8BC34A', name: 'Lime' }
 ];
 
-// Apply random color theme to page
+// Apply random color theme to page for feedback
 function applyRandomColorTheme() {
     const randomTheme = lightThemeColors[Math.floor(Math.random() * lightThemeColors.length)];
     const body = document.body;
     const originalBg = body.style.backgroundColor;
-    
-    // Apply theme with smooth transition
+
     body.style.transition = 'background-color 0.5s ease';
     body.style.backgroundColor = randomTheme.bg;
-    
-    // Revert back after 2 seconds
     setTimeout(() => {
         body.style.backgroundColor = originalBg;
     }, 2000);
-    
-    // Only log theme changes once every 10 minutes to reduce spam
+
     const now = Date.now();
     if (now - lastBackgroundLogTime > 600000) {
         console.log(`Applied ${randomTheme.name} theme for location update feedback`);
@@ -46,17 +43,10 @@ function applyRandomColorTheme() {
 // Rate limiting: only allow 1 request per minute (60 seconds)
 function canMakeLocationRequest() {
     const now = Date.now();
-    const timeSinceLastUpdate = now - lastLocationUpdateTime;
-    const minInterval = 60000; // 60 seconds in milliseconds
-    
-    if (timeSinceLastUpdate < minInterval) {
-        return false;
-    }
-    
-    return true;
+    return (now - lastLocationUpdateTime) >= 60000;
 }
 
-// Check if location permission is enabled
+// Check and monitor location permission
 function checkLocationPermission() {
     if (!navigator.geolocation) {
         locationPermissionStatus = 'unsupported';
@@ -70,12 +60,9 @@ function checkLocationPermission() {
                 locationPermissionStatus = status.state;
                 if (status.state === 'denied') {
                     showLocationWarning('Location access is denied. Please enable location permission to continue using the app.');
-                    return false;
                 } else if (status.state === 'granted') {
                     hideLocationWarning();
-                    return true;
                 }
-                
                 status.onchange = () => {
                     locationPermissionStatus = status.state;
                     if (status.state === 'denied') {
@@ -150,6 +137,7 @@ function hideLocationWarning() {
     }
 }
 
+// Get current location (for check-in/out)
 function getCurrentLocation(callback) {
     if (!navigator.geolocation) {
         showLocationWarning("Geolocation is not supported by your browser.");
@@ -186,43 +174,30 @@ function getCurrentLocation(callback) {
 function isUserCheckedIn() {
     const checkinBtn = document.getElementById("checkin-btn");
     const checkoutBtn = document.getElementById("checkout-btn");
-    
-    return (checkinBtn && checkinBtn.style.display === 'none' && 
+    return (checkinBtn && checkinBtn.style.display === 'none' &&
             checkoutBtn && checkoutBtn.style.display !== 'none');
 }
 
-// Background location update function using FastAPI exclusively with service worker bypass
+// Background location update function using FastAPI with SW bypass
 function updateLocationInBackground() {
     if (locationPermissionStatus === 'denied') {
         stopBackgroundLocationUpdates();
         return;
     }
-
-    if (!canMakeLocationRequest()) {
-        return;
-    }
-
-    if (isLocationUpdateInProgress) {
-        return;
-    }
-
+    if (!canMakeLocationRequest()) return;
+    if (isLocationUpdateInProgress) return;
     if (!isUserCheckedIn()) {
         stopBackgroundLocationUpdates();
         return;
     }
 
     isLocationUpdateInProgress = true;
-
     navigator.geolocation.getCurrentPosition(
-        function(position) {
+        function (position) {
             const latitude = position.coords.latitude;
             const longitude = position.coords.longitude;
-            
-            // Get username from session or page data
             const usernameElement = document.querySelector('[data-username]');
             let username = usernameElement ? usernameElement.getAttribute('data-username') : null;
-            
-            // Fallback: try to get from other sources
             if (!username) {
                 const userInfoElement = document.querySelector('.user-info');
                 if (userInfoElement) {
@@ -231,17 +206,13 @@ function updateLocationInBackground() {
                     if (match) username = match[1];
                 }
             }
-            
             if (!username) {
                 console.error('Username not found for background location update');
                 isLocationUpdateInProgress = false;
                 return;
             }
-            
-            // Create AJAX request with proper headers to bypass service worker
             const xhr = new XMLHttpRequest();
             const fastApiUrl = `http://54.250.198.0:8000/update_location/${username}/${longitude}_${latitude}`;
-            
             xhr.open('POST', fastApiUrl, true);
             xhr.setRequestHeader('Content-Type', 'application/json');
             xhr.setRequestHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
@@ -249,29 +220,20 @@ function updateLocationInBackground() {
             xhr.setRequestHeader('Expires', '0');
             xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
             xhr.setRequestHeader('X-Bypass-Service-Worker', 'true');
-            
-            xhr.onreadystatechange = function() {
+            xhr.onreadystatechange = function () {
                 if (xhr.readyState === XMLHttpRequest.DONE) {
                     isLocationUpdateInProgress = false;
-                    
                     if (xhr.status === 200) {
                         try {
                             const data = JSON.parse(xhr.responseText);
-                            
                             if (data.message && data.message.includes('Location added')) {
                                 lastLocationUpdateTime = Date.now();
-                                
-                                // Only log success once every 10 minutes to reduce console spam
                                 const now = Date.now();
                                 if (now - lastBackgroundLogTime > 600000) {
                                     console.log(`Background location updated successfully via FastAPI at ${new Date().toLocaleTimeString()}`);
                                     lastBackgroundLogTime = now;
                                 }
-                                
-                                // Apply color theme feedback
                                 applyRandomColorTheme();
-                                
-                                // Update location display if elements exist
                                 updateLocationDisplay(data);
                             }
                         } catch (err) {
@@ -280,14 +242,12 @@ function updateLocationInBackground() {
                     }
                 }
             };
-            
-            xhr.onerror = function() {
+            xhr.onerror = function () {
                 isLocationUpdateInProgress = false;
             };
-            
             xhr.send(JSON.stringify({}));
         },
-        function(error) {
+        function (error) {
             isLocationUpdateInProgress = false;
             if (error.code === error.PERMISSION_DENIED) {
                 locationPermissionStatus = 'denied';
@@ -303,28 +263,20 @@ function updateLocationInBackground() {
 function updateLocationDisplay(response) {
     const locationDisplay = document.getElementById('location-display');
     const lastUpdatedDisplay = document.getElementById('last-updated');
-    
     if (locationDisplay && response.address) {
         locationDisplay.innerHTML = `<i class="fas fa-map-marker-alt"></i> ${response.address}`;
     }
-    
     if (lastUpdatedDisplay) {
         const now = new Date();
         lastUpdatedDisplay.textContent = `Last updated: ${now.toLocaleTimeString()}`;
     }
 }
 
-// Start background location updates every 60 seconds - WORKS WHEN MINIMIZED
+// Start background location updates every 60 seconds (works minimized)
 function startBackgroundLocationUpdates() {
-    if (backgroundLocationInterval) {
-        clearInterval(backgroundLocationInterval);
-    }
-    
-    // Update every 60 seconds (1 minute) - continues even when page is minimized
+    if (backgroundLocationInterval) clearInterval(backgroundLocationInterval);
     backgroundLocationInterval = setInterval(updateLocationInBackground, 60000);
-    console.log('Background location updates started (60 second interval) - works when minimized');
-    
-    // Do an immediate update after a short delay
+    console.log('Background location updates started (60s interval)');
     setTimeout(updateLocationInBackground, 5000);
 }
 
@@ -337,23 +289,21 @@ function stopBackgroundLocationUpdates() {
     }
 }
 
-// Handle page visibility changes
+// Visibility change: DO NOT stop interval when hidden
 function handleVisibilityChange() {
     if (document.hidden) {
         isPageVisible = false;
-        // Don't stop background updates when page is hidden - this is the key fix
         console.log('Page hidden - background updates continue running');
     } else {
         isPageVisible = true;
         console.log('Page visible - background updates still running');
-        
-        // Resume if stopped and user is checked in
         if (isUserCheckedIn() && !backgroundLocationInterval) {
             startBackgroundLocationUpdates();
         }
     }
 }
 
+// Listen for check-in/out and trigger background location tracking
 document.addEventListener("DOMContentLoaded", function () {
     const checkinBtn = document.getElementById("checkin-btn");
     const checkoutBtn = document.getElementById("checkout-btn");
@@ -381,51 +331,35 @@ document.addEventListener("DOMContentLoaded", function () {
             showLocationWarning("Location not available. Please try again.");
             return;
         }
-
         console.log("Sending location for action:", action);
-        
         const xhr = new XMLHttpRequest();
         xhr.open("POST", "dashboard.php", true);
         xhr.setRequestHeader("Content-Type", "application/x-www-form-urlencoded");
         xhr.setRequestHeader('Cache-Control', 'no-cache');
         xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
-
         xhr.onreadystatechange = function () {
             if (xhr.readyState === XMLHttpRequest.DONE) {
                 console.log("Server response status:", xhr.status);
-                
                 try {
                     const response = JSON.parse(xhr.responseText);
                     console.log("Parsed response:", response);
-                    
                     if (response.success) {
                         console.log("Action successful, updating UI...");
-                        
-                        // Update button states immediately
                         if (action === "checkin") {
                             checkinBtn.style.display = 'none';
                             checkoutBtn.style.display = 'inline-block';
-                            // Start background location updates
-                            console.log('Starting background location tracking after check-in');
                             startBackgroundLocationUpdates();
                         } else if (action === "checkout") {
                             checkinBtn.style.display = 'inline-block';
                             checkoutBtn.style.display = 'none';
-                            // Stop background location updates
-                            console.log('Stopping background location tracking after check-out');
                             stopBackgroundLocationUpdates();
                         }
-                        
-                        // Apply color theme feedback for successful action
                         applyRandomColorTheme();
-                        
-                        // Force page refresh after UI update to ensure everything is synced
                         setTimeout(() => {
                             window.location.reload(true);
                         }, 1500);
                     } else {
                         alert("Failed: " + response.message);
-                        
                         if (response.debug) {
                             console.log("Debug info:", response.debug);
                         }
@@ -437,7 +371,6 @@ document.addEventListener("DOMContentLoaded", function () {
                 }
             }
         };
-
         const params = `latitude=${userLatitude}&longitude=${userLongitude}&action=${action}&ajax=1`;
         console.log("Sending params:", params);
         xhr.send(params);
@@ -446,11 +379,7 @@ document.addEventListener("DOMContentLoaded", function () {
     // Initialize everything
     function initializeLocationManager() {
         checkLocationPermission();
-        
-        // Set up page visibility listener - but don't stop background updates
         document.addEventListener('visibilitychange', handleVisibilityChange);
-        
-        // Check if user is already checked in and start background updates
         setTimeout(() => {
             if (isUserCheckedIn()) {
                 console.log('User is checked in on page load, starting background location updates');
@@ -459,16 +388,19 @@ document.addEventListener("DOMContentLoaded", function () {
                 console.log('User is not checked in on page load');
             }
         }, 1000);
-        
         console.log('Location manager initialized');
     }
 
-    // Initialize on page load
     initializeLocationManager();
 
-    // Expose functions globally for use by other scripts
+    // Expose functions globally for other scripts
     window.startBackgroundLocationUpdates = startBackgroundLocationUpdates;
     window.stopBackgroundLocationUpdates = stopBackgroundLocationUpdates;
     window.updateLocationInBackground = updateLocationInBackground;
     window.checkLocationPermission = checkLocationPermission;
+});
+
+// Clean up on page unload
+window.addEventListener('beforeunload', function () {
+    stopBackgroundLocationUpdates();
 });
