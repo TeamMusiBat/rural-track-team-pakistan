@@ -71,10 +71,10 @@ export class MobileLocationService {
     }
     
     private setupBackgroundHandling() {
-        // Handle page visibility changes
+        // Handle page visibility changes for background tracking
         document.addEventListener('visibilitychange', () => {
             if (document.hidden && this.isTracking) {
-                console.log('Page hidden - enabling background tracking');
+                console.log('Page hidden - continuing background tracking');
                 this.enableBackgroundMode();
             } else if (!document.hidden && this.isTracking) {
                 console.log('Page visible - resuming foreground tracking');
@@ -85,10 +85,27 @@ export class MobileLocationService {
         // Handle beforeunload to maintain tracking
         window.addEventListener('beforeunload', () => {
             if (this.isTracking) {
-                console.log('Page unloading - maintaining background tracking');
+                console.log('Page unloading - scheduling background update');
                 this.scheduleBackgroundUpdate();
             }
         });
+        
+        // Handle app state changes for Capacitor
+        if (Capacitor.isNativePlatform()) {
+            document.addEventListener('resume', () => {
+                console.log('App resumed from background');
+                if (this.isTracking) {
+                    this.getCurrentLocationAndUpdate();
+                }
+            });
+            
+            document.addEventListener('pause', () => {
+                console.log('App paused to background');
+                if (this.isTracking) {
+                    this.scheduleBackgroundUpdate();
+                }
+            });
+        }
     }
     
     private enableBackgroundMode() {
@@ -159,14 +176,20 @@ export class MobileLocationService {
         try {
             console.log('Starting native location tracking...');
             
-            // Use high accuracy tracking with background support
+            // Use Capacitor's watchPosition with correct signature
             this.watchId = await Geolocation.watchPosition(
                 {
                     enableHighAccuracy: true,
                     timeout: 15000,
                     maximumAge: 60000
                 },
-                (position) => {
+                (position, err) => {
+                    if (err) {
+                        console.error('Native location error:', err);
+                        this.handleLocationError(err);
+                        return;
+                    }
+                    
                     if (position && position.coords) {
                         console.log('Native location update:', position.coords);
                         this.updateLocationToServer(
@@ -174,10 +197,6 @@ export class MobileLocationService {
                             position.coords.longitude
                         );
                     }
-                },
-                (error) => {
-                    console.error('Native location error:', error);
-                    this.handleLocationError(error);
                 }
             );
             
