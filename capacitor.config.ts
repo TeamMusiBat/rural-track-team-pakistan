@@ -12,8 +12,22 @@ const config: CapacitorConfig = {
   plugins: {
     Geolocation: {
       enableBackground: true,
-      backgroundPermissionRationale: "This app needs background location access for attendance tracking."
+      backgroundPermissionRationale: "This app needs background location access for attendance tracking and real-time location updates.",
+      requestPermissions: true,
+      accuracy: "high"
+    },
+    App: {
+      keepRunning: true
     }
+  },
+  android: {
+    allowMixedContent: true,
+    captureInput: true,
+    webContentsDebuggingEnabled: false
+  },
+  ios: {
+    contentInset: 'automatic',
+    scrollEnabled: true
   }
 };
 

@@ -1,7 +1,7 @@
+
 import { Capacitor } from '@capacitor/core';
 import { Geolocation } from '@capacitor/geolocation';
 
-// Use built-in background approaches instead of external plugins
 export class MobileLocationService {
     private isTracking = false;
     private watchId: string | null = null;
@@ -9,170 +9,226 @@ export class MobileLocationService {
     private lastUpdateTime = 0;
     private username: string | null = null;
     private fastApiUrl = 'http://54.250.198.0:8000';
+    private maxRetries = 3;
+    private retryCount = 0;
     
     constructor() {
         this.init();
     }
     
     private async init() {
+        console.log('Initializing MobileLocationService...');
+        
         if (Capacitor.isNativePlatform()) {
-            // Request permissions for native platforms
-            await this.requestPermissions();
+            console.log('Native platform detected, requesting permissions...');
+            await this.requestNativePermissions();
+        } else {
+            console.log('Web platform detected, using web geolocation...');
+            await this.requestWebPermissions();
         }
         
-        // Set up page visibility handling for background updates
         this.setupBackgroundHandling();
     }
     
-    private async requestPermissions() {
+    private async requestNativePermissions() {
         try {
             const permissions = await Geolocation.requestPermissions();
-            console.log('Location permissions:', permissions);
+            console.log('Geolocation permissions:', permissions);
+            
+            if (permissions.location === 'granted') {
+                console.log('Location permission granted');
+                return true;
+            } else {
+                console.error('Location permission denied');
+                return false;
+            }
         } catch (error) {
             console.error('Permission request failed:', error);
+            return false;
         }
+    }
+    
+    private async requestWebPermissions() {
+        return new Promise<boolean>((resolve) => {
+            if (!navigator.geolocation) {
+                console.error('Geolocation not supported');
+                resolve(false);
+                return;
+            }
+            
+            navigator.geolocation.getCurrentPosition(
+                () => {
+                    console.log('Web geolocation permission granted');
+                    resolve(true);
+                },
+                (error) => {
+                    console.error('Web geolocation permission denied:', error);
+                    resolve(false);
+                },
+                { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }
+            );
+        });
     }
     
     private setupBackgroundHandling() {
-        // Handle page visibility changes to maintain tracking
+        // Handle page visibility changes
         document.addEventListener('visibilitychange', () => {
             if (document.hidden && this.isTracking) {
-                console.log('Page hidden - maintaining background location tracking');
-                this.maintainBackgroundTracking();
+                console.log('Page hidden - enabling background tracking');
+                this.enableBackgroundMode();
             } else if (!document.hidden && this.isTracking) {
-                console.log('Page visible - resuming active location tracking');
-                this.resumeActiveTracking();
+                console.log('Page visible - resuming foreground tracking');
+                this.enableForegroundMode();
             }
         });
         
-        // Handle page beforeunload to keep tracking alive
+        // Handle beforeunload to maintain tracking
         window.addEventListener('beforeunload', () => {
             if (this.isTracking) {
-                // Keep tracking active even when page unloads
+                console.log('Page unloading - maintaining background tracking');
                 this.scheduleBackgroundUpdate();
             }
         });
-        
-        // Use Web Workers for background processing if available
-        if ('serviceWorker' in navigator) {
-            this.setupServiceWorkerTracking();
-        }
     }
     
-    private maintainBackgroundTracking() {
-        // Use high-frequency updates when in background
+    private enableBackgroundMode() {
         if (this.backgroundUpdateInterval) {
             clearInterval(this.backgroundUpdateInterval);
         }
         
+        // More frequent updates in background (every 30 seconds)
         this.backgroundUpdateInterval = window.setInterval(() => {
             if (this.isTracking) {
                 this.getCurrentLocationAndUpdate();
             }
-        }, 30000); // Update every 30 seconds in background
+        }, 30000);
+        
+        console.log('Background mode enabled with 30s intervals');
     }
     
-    private resumeActiveTracking() {
-        // Resume normal tracking frequency when active
+    private enableForegroundMode() {
         if (this.backgroundUpdateInterval) {
             clearInterval(this.backgroundUpdateInterval);
         }
         
+        // Less frequent updates in foreground (every 60 seconds)
         this.backgroundUpdateInterval = window.setInterval(() => {
             if (this.isTracking) {
                 this.getCurrentLocationAndUpdate();
             }
-        }, 60000); // Update every 60 seconds when active
-    }
-    
-    private async setupServiceWorkerTracking() {
-        try {
-            const registration = await navigator.serviceWorker.register('/sw.js');
-            console.log('Service Worker registered for background tracking');
-            
-            // Send tracking commands to service worker
-            if (registration.active) {
-                registration.active.postMessage({
-                    command: 'SETUP_LOCATION_TRACKING',
-                    fastApiUrl: this.fastApiUrl
-                });
-            }
-        } catch (error) {
-            console.log('Service Worker not available, using fallback methods');
-        }
+        }, 60000);
+        
+        console.log('Foreground mode enabled with 60s intervals');
     }
     
     private scheduleBackgroundUpdate() {
-        // Use setTimeout to schedule immediate background update
         setTimeout(() => {
             if (this.isTracking) {
                 this.getCurrentLocationAndUpdate();
             }
-        }, 1000);
+        }, 5000);
     }
     
     async startTracking(username: string) {
         this.username = username;
         this.isTracking = true;
+        this.retryCount = 0;
         
         console.log(`Starting location tracking for user: ${username}`);
         
-        if (Capacitor.isNativePlatform()) {
-            await this.startNativeTracking();
-        } else {
-            this.startWebTracking();
+        try {
+            if (Capacitor.isNativePlatform()) {
+                await this.startNativeTracking();
+            } else {
+                this.startWebTracking();
+            }
+            
+            // Start background updates immediately
+            this.enableForegroundMode();
+            
+            // Initial location update
+            await this.getCurrentLocationAndUpdate();
+            
+        } catch (error) {
+            console.error('Failed to start tracking:', error);
+            this.showError('Failed to start location tracking');
         }
-        
-        // Start background updates
-        this.resumeActiveTracking();
     }
     
     private async startNativeTracking() {
         try {
-            // High accuracy tracking for native platforms with background support
+            console.log('Starting native location tracking...');
+            
+            // Use high accuracy tracking with background support
             this.watchId = await Geolocation.watchPosition(
                 {
                     enableHighAccuracy: true,
-                    timeout: 10000,
-                    maximumAge: 30000
+                    timeout: 15000,
+                    maximumAge: 60000
                 },
                 (position) => {
-                    if (position) {
+                    if (position && position.coords) {
+                        console.log('Native location update:', position.coords);
                         this.updateLocationToServer(
                             position.coords.latitude,
                             position.coords.longitude
                         );
                     }
+                },
+                (error) => {
+                    console.error('Native location error:', error);
+                    this.handleLocationError(error);
                 }
             );
             
-            console.log('Native location tracking started');
+            console.log('Native location tracking started with watchId:', this.watchId);
         } catch (error) {
             console.error('Native tracking failed:', error);
-            this.startWebTracking(); // Fallback to web
+            throw error;
         }
     }
     
     private startWebTracking() {
-        if (navigator.geolocation) {
-            this.watchId = navigator.geolocation.watchPosition(
-                (position) => {
-                    this.updateLocationToServer(
-                        position.coords.latitude,
-                        position.coords.longitude
-                    );
-                },
-                (error) => {
-                    console.error('Web geolocation error:', error);
-                },
-                {
-                    enableHighAccuracy: true,
-                    timeout: 10000,
-                    maximumAge: 30000
-                }
-            ) as any;
+        if (!navigator.geolocation) {
+            throw new Error('Geolocation not supported');
+        }
+        
+        console.log('Starting web location tracking...');
+        
+        this.watchId = navigator.geolocation.watchPosition(
+            (position) => {
+                console.log('Web location update:', position.coords);
+                this.updateLocationToServer(
+                    position.coords.latitude,
+                    position.coords.longitude
+                );
+            },
+            (error) => {
+                console.error('Web location error:', error);
+                this.handleLocationError(error);
+            },
+            {
+                enableHighAccuracy: true,
+                timeout: 15000,
+                maximumAge: 60000
+            }
+        ) as any;
+        
+        console.log('Web location tracking started with watchId:', this.watchId);
+    }
+    
+    private handleLocationError(error: any) {
+        console.error('Location error:', error);
+        
+        if (this.retryCount < this.maxRetries) {
+            this.retryCount++;
+            console.log(`Retrying location request (${this.retryCount}/${this.maxRetries})...`);
             
-            console.log('Web location tracking started');
+            setTimeout(() => {
+                this.getCurrentLocationAndUpdate();
+            }, 5000);
+        } else {
+            this.showError('Location tracking failed after multiple attempts');
         }
     }
     
@@ -181,28 +237,36 @@ export class MobileLocationService {
             if (Capacitor.isNativePlatform()) {
                 const position = await Geolocation.getCurrentPosition({
                     enableHighAccuracy: true,
-                    timeout: 10000,
-                    maximumAge: 30000
+                    timeout: 15000,
+                    maximumAge: 60000
                 });
                 
-                this.updateLocationToServer(
-                    position.coords.latitude,
-                    position.coords.longitude
-                );
+                if (position && position.coords) {
+                    console.log('Native current location:', position.coords);
+                    await this.updateLocationToServer(
+                        position.coords.latitude,
+                        position.coords.longitude
+                    );
+                }
             } else {
                 navigator.geolocation.getCurrentPosition(
-                    (position) => {
-                        this.updateLocationToServer(
+                    async (position) => {
+                        console.log('Web current location:', position.coords);
+                        await this.updateLocationToServer(
                             position.coords.latitude,
                             position.coords.longitude
                         );
                     },
-                    (error) => console.error('Location update error:', error),
-                    { enableHighAccuracy: true, timeout: 10000, maximumAge: 30000 }
+                    (error) => {
+                        console.error('Current location error:', error);
+                        this.handleLocationError(error);
+                    },
+                    { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 }
                 );
             }
         } catch (error) {
-            console.error('Background location update failed:', error);
+            console.error('Get current location failed:', error);
+            this.handleLocationError(error);
         }
     }
     
@@ -211,6 +275,7 @@ export class MobileLocationService {
         
         // Rate limiting - only update once per minute
         if (now - this.lastUpdateTime < 60000) {
+            console.log('Rate limiting - skipping update');
             return;
         }
         
@@ -220,6 +285,8 @@ export class MobileLocationService {
         }
         
         try {
+            console.log(`Updating location for ${this.username}: ${latitude}, ${longitude}`);
+            
             const response = await fetch(
                 `${this.fastApiUrl}/update_location/${this.username}/${longitude}_${latitude}`,
                 {
@@ -229,37 +296,91 @@ export class MobileLocationService {
                         'Cache-Control': 'no-cache',
                         'X-Bypass-Service-Worker': 'true'
                     },
-                    body: JSON.stringify({})
+                    body: JSON.stringify({
+                        timestamp: new Date().toISOString(),
+                        accuracy: 'high'
+                    })
                 }
             );
             
             if (response.ok) {
                 const data = await response.json();
                 this.lastUpdateTime = now;
-                console.log('Location updated successfully:', data.message);
-                
-                // Visual feedback
+                this.retryCount = 0; // Reset retry count on success
+                console.log('Location updated successfully:', data);
                 this.showLocationUpdateFeedback();
+            } else {
+                throw new Error(`Server responded with status: ${response.status}`);
             }
         } catch (error) {
             console.error('Location update failed:', error);
+            this.handleLocationError(error);
         }
     }
     
     private showLocationUpdateFeedback() {
-        // Show brief visual feedback
-        const body = document.body;
-        if (body) {
-            body.style.transition = 'background-color 0.3s ease';
-            body.style.backgroundColor = '#E8F5E8';
-            
-            setTimeout(() => {
-                body.style.backgroundColor = '';
-            }, 1000);
-        }
+        // Brief visual feedback
+        const indicator = document.getElementById('location-status') || this.createLocationIndicator();
+        indicator.style.backgroundColor = '#4CAF50';
+        indicator.textContent = '📍';
+        
+        setTimeout(() => {
+            indicator.style.backgroundColor = '#666';
+            indicator.textContent = '📍';
+        }, 2000);
+    }
+    
+    private createLocationIndicator() {
+        const indicator = document.createElement('div');
+        indicator.id = 'location-status';
+        indicator.style.cssText = `
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            background: #666;
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            z-index: 1000;
+            transition: all 0.3s ease;
+        `;
+        indicator.textContent = '📍';
+        document.body.appendChild(indicator);
+        return indicator;
+    }
+    
+    private showError(message: string) {
+        console.error('MobileLocationService Error:', message);
+        
+        // Show user-friendly error
+        const errorDiv = document.createElement('div');
+        errorDiv.style.cssText = `
+            position: fixed;
+            top: 50px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #f44336;
+            color: white;
+            padding: 12px 20px;
+            border-radius: 8px;
+            z-index: 10000;
+            font-size: 14px;
+        `;
+        errorDiv.textContent = message;
+        document.body.appendChild(errorDiv);
+        
+        setTimeout(() => {
+            errorDiv.remove();
+        }, 5000);
     }
     
     stopTracking() {
+        console.log('Stopping location tracking...');
         this.isTracking = false;
         
         if (this.watchId) {
@@ -276,6 +397,12 @@ export class MobileLocationService {
             this.backgroundUpdateInterval = null;
         }
         
+        // Remove location indicator
+        const indicator = document.getElementById('location-status');
+        if (indicator) {
+            indicator.remove();
+        }
+        
         console.log('Location tracking stopped');
     }
     
@@ -284,10 +411,15 @@ export class MobileLocationService {
             isTracking: this.isTracking,
             isNative: Capacitor.isNativePlatform(),
             platform: Capacitor.getPlatform(),
-            lastUpdate: this.lastUpdateTime ? new Date(this.lastUpdateTime).toLocaleTimeString() : 'Never'
+            username: this.username,
+            lastUpdate: this.lastUpdateTime ? new Date(this.lastUpdateTime).toLocaleTimeString() : 'Never',
+            retryCount: this.retryCount
         };
     }
 }
 
-// Create global instance
+// Create and export global instance
 export const mobileLocationService = new MobileLocationService();
+
+// Make it globally available for dashboard scripts
+(window as any).mobileLocationService = mobileLocationService;
