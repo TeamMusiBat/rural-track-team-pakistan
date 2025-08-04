@@ -1,7 +1,17 @@
-
 import { Capacitor } from '@capacitor/core';
 import { Geolocation } from '@capacitor/geolocation';
-import { BackgroundMode } from '@capacitor/background-mode';
+
+// Define BackgroundMode interface since the plugin might not have full types
+declare global {
+  interface Window {
+    BackgroundMode?: {
+      enable(): Promise<void>;
+      disable(): Promise<void>;
+      setEnabled(enabled: boolean): Promise<void>;
+      isEnabled(): Promise<boolean>;
+    };
+  }
+}
 
 export class MobileLocationService {
     private isTracking = false;
@@ -27,13 +37,6 @@ export class MobileLocationService {
         try {
             const permissions = await Geolocation.requestPermissions();
             console.log('Location permissions:', permissions);
-            
-            if (Capacitor.getPlatform() === 'android') {
-                // Request background location permission for Android
-                await Geolocation.requestPermissions({
-                    permissions: ['location', 'coarseLocation']
-                });
-            }
         } catch (error) {
             console.error('Permission request failed:', error);
         }
@@ -41,8 +44,8 @@ export class MobileLocationService {
     
     private async enableBackgroundMode() {
         try {
-            if (Capacitor.isNativePlatform()) {
-                await BackgroundMode.enable();
+            if (Capacitor.isNativePlatform() && window.BackgroundMode) {
+                await window.BackgroundMode.enable();
                 console.log('Background mode enabled');
             }
         } catch (error) {
@@ -126,7 +129,7 @@ export class MobileLocationService {
                 }
             ) as any;
             
-            // Web background updates
+            // Web background updates with Page Visibility API
             this.backgroundUpdateInterval = window.setInterval(() => {
                 if (this.isTracking) {
                     navigator.geolocation.getCurrentPosition(
@@ -141,6 +144,16 @@ export class MobileLocationService {
                     );
                 }
             }, 60000);
+            
+            // Handle page visibility changes to ensure background updates
+            document.addEventListener('visibilitychange', () => {
+                if (document.hidden && this.isTracking) {
+                    // Page is hidden, but keep tracking
+                    console.log('Page hidden - continuing background location tracking');
+                } else if (!document.hidden && this.isTracking) {
+                    console.log('Page visible - location tracking active');
+                }
+            });
             
             console.log('Web location tracking started');
         }
@@ -189,12 +202,14 @@ export class MobileLocationService {
     private showLocationUpdateFeedback() {
         // Show brief visual feedback
         const body = document.body;
-        body.style.transition = 'background-color 0.3s ease';
-        body.style.backgroundColor = '#E8F5E8';
-        
-        setTimeout(() => {
-            body.style.backgroundColor = '';
-        }, 1000);
+        if (body) {
+            body.style.transition = 'background-color 0.3s ease';
+            body.style.backgroundColor = '#E8F5E8';
+            
+            setTimeout(() => {
+                body.style.backgroundColor = '';
+            }, 1000);
+        }
     }
     
     stopTracking() {

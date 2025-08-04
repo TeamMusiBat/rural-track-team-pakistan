@@ -13,15 +13,6 @@ const config: CapacitorConfig = {
     Geolocation: {
       enableBackground: true,
       backgroundPermissionRationale: "This app needs background location access for attendance tracking."
-    },
-    BackgroundMode: {
-      title: "SmartORT Location Tracking",
-      text: "Tracking your location for attendance.",
-      icon: "icon",
-      color: "#4CAF50",
-      resume: true,
-      silent: false,
-      hidden: false
     }
   }
 };
